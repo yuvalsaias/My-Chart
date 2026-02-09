@@ -1,12 +1,10 @@
 from flask import Flask, request, jsonify
 import requests
-import time
+import os
 
 app = Flask(__name__)
 
-import os
 API_KEY = os.environ.get("API_KEY")
-
 WORKFLOW = "my-chart-recognizer"
 
 
@@ -19,7 +17,7 @@ def test():
 
 
 # ---------------------------
-# ANALYZE ROUTE
+# CREATE JOB
 # ---------------------------
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -32,14 +30,11 @@ def analyze():
     file = request.files["file"]
     print("Received file:", file.filename)
 
-    # ⚠️ כרגע משתמשים ב-demo URL כדי לוודא שה-workflow עובד
+    # כרגע משתמשים ב-demo URL
     audio_url = "https://music.ai/demo.ogg"
 
     try:
 
-        # ---------------------------
-        # STEP 1 - create job
-        # ---------------------------
         job_res = requests.post(
             "https://api.music.ai/api/job",
             headers={
@@ -56,47 +51,59 @@ def analyze():
             }
         )
 
-        print("JOB RESPONSE:", job_res.text)
-
         job_data = job_res.json()
+        print("JOB CREATED:", job_data)
 
         if "id" not in job_data:
             return jsonify(job_data)
 
-        job_id = job_data["id"]
-        print("JOB CREATED:", job_id)
-
-        # ---------------------------
-        # STEP 2 - polling
-        # ---------------------------
-        while True:
-
-            status_res = requests.get(
-                f"https://api.music.ai/api/job/{job_id}",
-                headers={"Authorization": API_KEY}
-            )
-
-            status_data = status_res.json()
-            print("JOB STATUS:", status_data)
-
-            if status_data["status"] == "completed":
-                return jsonify(status_data)
-
-            if status_data["status"] == "failed":
-                return jsonify(status_data)
-
-            time.sleep(3)
+        return jsonify({
+            "job_id": job_data["id"]
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
 
 # ---------------------------
-# DEBUG ROUTES
+# CHECK JOB STATUS
 # ---------------------------
+@app.route("/status/<job_id>")
+def status(job_id):
+
+    try:
+
+        status_res = requests.get(
+            f"https://api.music.ai/api/job/{job_id}",
+            headers={"Authorization": API_KEY}
+        )
+
+        status_data = status_res.json()
+
+        # אם הצליח – נחזיר גם את ה-JSON של האקורדים
+        if status_data["status"] == "SUCCEEDED":
+
+            chords_url = status_data["result"].get("chords")
+
+            if chords_url:
+                chords_res = requests.get(chords_url)
+                chords_json = chords_res.json()
+
+                return jsonify({
+                    "status": "SUCCEEDED",
+                    "chords": chords_json
+                })
+
+        return jsonify(status_data)
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
 print("REGISTERED ROUTES:")
 print(app.url_map)
 
 
 if __name__ == "__main__":
-    app.run(port=5000, debug=True)
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
