@@ -33,41 +33,57 @@ def pick_best_chord(c):
 
 
 # ---------------------------
-# CHORD PARSER
+# SAFE CHORD PARSER
 # ---------------------------
 def parse_chord_for_xml(chord):
 
-    if "/" in chord:
-        chord = chord.split("/")[0]
+    try:
 
-    match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
+        # normalize symbols
+        chord = chord.replace("Δ", "maj")
+        chord = chord.replace("-", "m")
 
-    step, accidental, quality = match.groups()
+        # remove slash bass
+        if "/" in chord:
+            chord = chord.split("/")[0]
 
-    alter = None
-    if accidental == "#":
-        alter = 1
-    elif accidental == "b":
-        alter = -1
+        match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
 
-    quality = quality.lower()
+        if not match:
+            return "C", None, "major"
 
-    if "maj7" in quality:
-        kind = "major-seventh"
-    elif "m7" in quality:
-        kind = "minor-seventh"
-    elif quality.startswith("m"):
-        kind = "minor"
-    elif "7" in quality:
-        kind = "dominant"
-    else:
-        kind = "major"
+        step, accidental, quality = match.groups()
 
-    return step, alter, kind
+        alter = None
+        if accidental == "#":
+            alter = 1
+        elif accidental == "b":
+            alter = -1
+
+        quality = quality.lower()
+
+        if "maj7" in quality:
+            kind = "major-seventh"
+        elif "m7" in quality:
+            kind = "minor-seventh"
+        elif "sus" in quality:
+            kind = "suspended-fourth"
+        elif quality.startswith("m"):
+            kind = "minor"
+        elif "7" in quality:
+            kind = "dominant"
+        else:
+            kind = "major"
+
+        return step, alter, kind
+
+    except Exception as e:
+        print("CHORD PARSE ERROR:", chord, e)
+        return "C", None, "major"
 
 
 # ---------------------------
-# SEGMENTS FROM JSON
+# BUILD SEGMENTS
 # ---------------------------
 def build_segments(chords_list):
 
@@ -154,9 +170,6 @@ def chords_to_musicxml(segments):
 @app.route("/analyze", methods=["POST"])
 def analyze():
 
-    if "file" not in request.files:
-        return jsonify({"error": "No file"}), 400
-
     file = request.files["file"]
 
     upload_res = requests.get(
@@ -191,10 +204,7 @@ def analyze():
 
     job_data = job_res.json()
 
-    return jsonify({
-        "status": "CREATED",
-        "job_id": job_data["id"]
-    })
+    return jsonify({"job_id": job_data["id"]})
 
 
 # ---------------------------
@@ -223,7 +233,7 @@ def fetch_chords(job_id):
 
 
 # ---------------------------
-# STATUS ROUTE (BASE44 NEEDS THIS)
+# STATUS ROUTE
 # ---------------------------
 @app.route("/status/<job_id>")
 def status(job_id):
