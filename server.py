@@ -5,7 +5,7 @@ import time
 app = Flask(__name__)
 
 import os
-API_KEY = os.environ.get("5bbe2a00-20ff-44b6-833d-12adefcfc8ef")
+API_KEY = os.environ.get("API_KEY")
 
 WORKFLOW = "my-chart-recognizer"
 
