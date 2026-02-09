@@ -67,7 +67,7 @@ def parse_chord_for_xml(chord):
 
 
 # ---------------------------
-# CONVERT JSON TO SEGMENTS
+# SEGMENTS FROM JSON
 # ---------------------------
 def build_segments(chords_list):
 
@@ -96,7 +96,7 @@ def build_segments(chords_list):
 
 
 # ---------------------------
-# MUSICXML BUILDER WITH DURATION
+# MUSICXML BUILDER
 # ---------------------------
 def chords_to_musicxml(segments):
 
@@ -108,7 +108,6 @@ def chords_to_musicxml(segments):
 
     part = SubElement(score, "part", id="P1")
 
-    # collect all bars
     bars = sorted(set(s["start_bar"] for s in segments))
 
     for i, bar in enumerate(bars):
@@ -127,7 +126,6 @@ def chords_to_musicxml(segments):
             SubElement(time, "beats").text = "4"
             SubElement(time, "beat-type").text = "4"
 
-        # segments בתוך התיבה
         bar_segments = [s for s in segments if s["start_bar"] == bar]
 
         for seg in bar_segments:
@@ -144,7 +142,6 @@ def chords_to_musicxml(segments):
 
             SubElement(harmony, "kind").text = kind
 
-            # offset = start beat
             offset = SubElement(harmony, "offset")
             offset.text = str(seg["start_beat"] - 1)
 
@@ -156,6 +153,9 @@ def chords_to_musicxml(segments):
 # ---------------------------
 @app.route("/analyze", methods=["POST"])
 def analyze():
+
+    if "file" not in request.files:
+        return jsonify({"error": "No file"}), 400
 
     file = request.files["file"]
 
@@ -191,7 +191,10 @@ def analyze():
 
     job_data = job_res.json()
 
-    return jsonify({"job_id": job_data["id"]})
+    return jsonify({
+        "status": "CREATED",
+        "job_id": job_data["id"]
+    })
 
 
 # ---------------------------
@@ -207,16 +210,35 @@ def fetch_chords(job_id):
     status_data = status_res.json()
 
     if status_data["status"] != "SUCCEEDED":
-        return None
+        return None, status_data["status"]
 
     chords_url = status_data["result"]["chords"]
 
     chords_json = requests.get(chords_url).json()
 
     if isinstance(chords_json, dict):
-        return chords_json["chords"]
+        return chords_json["chords"], "SUCCEEDED"
 
-    return chords_json
+    return chords_json, "SUCCEEDED"
+
+
+# ---------------------------
+# STATUS ROUTE (BASE44 NEEDS THIS)
+# ---------------------------
+@app.route("/status/<job_id>")
+def status(job_id):
+
+    chords, state = fetch_chords(job_id)
+
+    if chords is None:
+        return jsonify({"status": state})
+
+    segments = build_segments(chords)
+
+    return jsonify({
+        "status": "SUCCEEDED",
+        "chart": segments
+    })
 
 
 # ---------------------------
@@ -225,9 +247,9 @@ def fetch_chords(job_id):
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
 
-    chords = fetch_chords(job_id)
+    chords, state = fetch_chords(job_id)
 
-    if not chords:
+    if chords is None:
         return jsonify({"error": "Processing"}), 400
 
     segments = build_segments(chords)
