@@ -1,8 +1,12 @@
 from flask import Flask, request, jsonify
+from flask_cors import CORS
 import requests
 import os
 
 app = Flask(__name__)
+
+# ✅ הפעלת CORS לכל הדומיינים
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 API_KEY = os.environ.get("API_KEY")
 WORKFLOW = "my-chart-recognizer"
@@ -55,9 +59,10 @@ def analyze():
         print("JOB CREATED:", job_data)
 
         if "id" not in job_data:
-            return jsonify(job_data)
+            return jsonify({"error": "Job creation failed", "data": job_data}), 500
 
         return jsonify({
+            "status": "CREATED",
             "job_id": job_data["id"]
         })
 
@@ -80,10 +85,10 @@ def status(job_id):
 
         status_data = status_res.json()
 
-        # אם הצליח – נחזיר גם את ה-JSON של האקורדים
-        if status_data["status"] == "SUCCEEDED":
+        # ✅ אם הסתיים בהצלחה
+        if status_data.get("status") == "SUCCEEDED":
 
-            chords_url = status_data["result"].get("chords")
+            chords_url = status_data.get("result", {}).get("chords")
 
             if chords_url:
                 chords_res = requests.get(chords_url)
@@ -94,7 +99,10 @@ def status(job_id):
                     "chords": chords_json
                 })
 
-        return jsonify(status_data)
+        # ✅ אם עדיין בתהליך
+        return jsonify({
+            "status": status_data.get("status", "UNKNOWN")
+        })
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
