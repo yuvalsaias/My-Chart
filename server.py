@@ -76,7 +76,6 @@ def build_chord_grid(chords_list):
         bar = start_bar
         beat = start_beat
 
-        # ממלא את כל הביטים עד סוף האקורד
         while True:
 
             grid.setdefault(bar, {})
@@ -87,7 +86,7 @@ def build_chord_grid(chords_list):
 
             beat += 1
 
-            if beat > 4:  # הנחה 4/4 כרגע
+            if beat > 4:
                 beat = 1
                 bar += 1
 
@@ -115,14 +114,16 @@ def chords_to_musicxml(grid):
 
         if bar == 0:
             attributes = SubElement(measure, "attributes")
+
             SubElement(attributes, "divisions").text = "1"
+
+            # ✔ תיקון schema — key חייב לבוא לפני time
+            key = SubElement(attributes, "key")
+            SubElement(key, "fifths").text = "0"
 
             time = SubElement(attributes, "time")
             SubElement(time, "beats").text = "4"
             SubElement(time, "beat-type").text = "4"
-
-            key = SubElement(attributes, "key")
-            SubElement(key, "fifths").text = "0"
 
         if bar not in grid:
             continue
@@ -135,7 +136,6 @@ def chords_to_musicxml(grid):
 
             chord = grid[bar][beat]
 
-            # מציג רק שינוי אקורד
             if chord == last_chord:
                 continue
 
@@ -153,7 +153,6 @@ def chords_to_musicxml(grid):
 
             SubElement(harmony, "kind").text = kind
 
-            # מיקום בתוך התיבה
             offset = SubElement(harmony, "offset")
             offset.text = str(beat - 1)
 
