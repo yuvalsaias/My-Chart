@@ -13,7 +13,7 @@ WORKFLOW = "my-chart-recognizer"
 
 
 # ---------------------------
-# TEST ROUTE
+# TEST
 # ---------------------------
 @app.route("/test")
 def test():
@@ -29,81 +29,6 @@ def pick_best_chord(c):
         or c.get("chord_simple_pop")
         or c.get("chord_basic_pop")
     )
-
-
-# ---------------------------
-# SAFE CHORD PARSER
-# ---------------------------
-def parse_chord_for_xml(chord):
-    try:
-        chord = chord.replace("Δ", "maj")
-        chord = chord.replace("-", "m")
-
-        if "/" in chord:
-            chord = chord.split("/")[0]
-
-        match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
-        if not match:
-            return "C", None, "major"
-
-        step, accidental, quality = match.groups()
-
-        alter = None
-        if accidental == "#":
-            alter = 1
-        elif accidental == "b":
-            alter = -1
-
-        quality = quality.lower()
-
-        if "maj7" in quality:
-            kind = "major-seventh"
-        elif "m7" in quality:
-            kind = "minor-seventh"
-        elif "sus" in quality:
-            kind = "suspended-fourth"
-        elif quality.startswith("m"):
-            kind = "minor"
-        elif "7" in quality:
-            kind = "dominant"
-        else:
-            kind = "major"
-
-        return step, alter, kind
-
-    except:
-        return "C", None, "major"
-
-
-# ---------------------------
-# SECTION MAPPING
-# ---------------------------
-def map_section_name(name, counters):
-    name = name.lower()
-
-    if "intro" in name:
-        return "INTRO"
-
-    if "outro" in name:
-        return "OUTRO"
-
-    if "verse" in name:
-        counters["A"] += 1
-        return f"A{counters['A']}"
-
-    if "chorus" in name:
-        counters["B"] += 1
-        return f"B{counters['B']}"
-
-    if "pre" in name or "bridge" in name:
-        counters["PRE"] += 1
-        return f"PRE {counters['PRE']}"
-
-    if "instrumental" in name:
-        counters["INST"] += 1
-        return f"INST {counters['INST']}"
-
-    return name.upper()
 
 
 # ---------------------------
@@ -142,86 +67,92 @@ def find_chord_at_time(chords, time):
 
 
 # ---------------------------
-# BUILD SEGMENTS FROM BEATS
+# BUILD SEGMENTS (FIXED)
 # ---------------------------
-def build_segments(chords, beats):
+def build_segments(chords, beat_grid):
 
     segments = []
 
     last_chord = None
-    seg_start = None
-    seg_bar = None
-    seg_beat = None
+    last_bar = None
+    last_beat = None
 
-    for beat in beats:
+    for beat in beat_grid:
 
         chord = find_chord_at_time(chords, beat["start"])
 
         chord_name = None
+
         if chord:
             chord_name = pick_best_chord(chord)
+
             if chord.get("bass"):
                 chord_name += "/" + chord["bass"]
 
-        if chord_name != last_chord:
+            bar = chord["start_bar"]
+            beat_num = beat["beat"]
 
-            if last_chord:
-                segments.append({
-                    "chord": last_chord,
-                    "start_bar": seg_bar,
-                    "start_beat": seg_beat
-                })
+        else:
+            bar = 0
+            beat_num = beat["beat"]
+
+        if chord_name != last_chord and chord_name is not None:
+
+            segments.append({
+                "chord": chord_name,
+                "start_bar": bar,
+                "start_beat": beat_num
+            })
 
             last_chord = chord_name
-            seg_start = beat["start"]
-            seg_bar = chord["start_bar"] if chord else 0
-            seg_beat = beat["beat"]
-
-    if last_chord:
-        segments.append({
-            "chord": last_chord,
-            "start_bar": seg_bar,
-            "start_beat": seg_beat
-        })
 
     return segments
 
 
 # ---------------------------
-# BUILD SECTIONS
+# SAFE CHORD PARSER
 # ---------------------------
-def build_sections(section_json):
+def parse_chord_for_xml(chord):
 
-    counters = {"A":0,"B":0,"PRE":0,"INST":0}
+    chord = chord.replace("Δ", "maj")
+    chord = chord.replace("-", "m")
 
-    result = []
+    if "/" in chord:
+        chord = chord.split("/")[0]
 
-    for s in section_json:
-        label = map_section_name(s["label"], counters)
+    match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
 
-        result.append({
-            "time": s["start"],
-            "label": label
-        })
+    if not match:
+        return "C", None, "major"
 
-    return result
+    step, accidental, quality = match.groups()
 
+    alter = None
+    if accidental == "#":
+        alter = 1
+    elif accidental == "b":
+        alter = -1
 
-# ---------------------------
-# ADD SECTION TEXT
-# ---------------------------
-def add_section_text(measure, label):
+    quality = quality.lower()
 
-    direction = SubElement(measure, "direction", placement="above")
-    dt = SubElement(direction, "direction-type")
-    words = SubElement(dt, "words", enclosure="rectangle")
-    words.text = label
+    if "maj7" in quality:
+        kind = "major-seventh"
+    elif "m7" in quality:
+        kind = "minor-seventh"
+    elif quality.startswith("m"):
+        kind = "minor"
+    elif "7" in quality:
+        kind = "dominant"
+    else:
+        kind = "major"
+
+    return step, alter, kind
 
 
 # ---------------------------
 # MUSICXML BUILDER
 # ---------------------------
-def chords_to_musicxml(segments, sections, beats):
+def chords_to_musicxml(segments):
 
     score = Element("score-partwise", version="3.1")
 
@@ -231,68 +162,48 @@ def chords_to_musicxml(segments, sections, beats):
 
     part = SubElement(score, "part", id="P1")
 
-    first_beat = beats[0]["beat"]
+    bars = sorted(set(s["start_bar"] for s in segments))
 
-    pickup_beats = first_beat - 1 if first_beat != 1 else 0
+    for i, bar in enumerate(bars):
 
-    measures = {}
-    section_lookup = {s["time"]: s["label"] for s in sections}
+        measure = SubElement(part, "measure", number=str(bar + 1))
 
-    current_measure = None
-    measure_num = 0
+        if i == 0:
+            attributes = SubElement(measure, "attributes")
 
-    for beat in beats:
+            SubElement(attributes, "divisions").text = "1"
 
-        if beat["beat"] == 1 or current_measure is None:
-            measure_num += 1
-            current_measure = SubElement(part, "measure", number=str(measure_num))
+            key = SubElement(attributes, "key")
+            SubElement(key, "fifths").text = "0"
 
-            if measure_num == 1:
-                attr = SubElement(current_measure, "attributes")
+            time = SubElement(attributes, "time")
+            SubElement(time, "beats").text = "4"
+            SubElement(time, "beat-type").text = "4"
 
-                SubElement(attr, "divisions").text = "1"
+        bar_segments = [s for s in segments if s["start_bar"] == bar]
 
-                key = SubElement(attr, "key")
-                SubElement(key, "fifths").text = "0"
+        for seg in bar_segments:
 
-                time_el = SubElement(attr, "time")
+            harmony = SubElement(measure, "harmony")
 
-                if pickup_beats:
-                    SubElement(time_el, "beats").text = str(4 - pickup_beats)
-                else:
-                    SubElement(time_el, "beats").text = "4"
+            step, alter, kind = parse_chord_for_xml(seg["chord"])
 
-                SubElement(time_el, "beat-type").text = "4"
+            root = SubElement(harmony, "root")
+            SubElement(root, "root-step").text = step
 
-        # sections
-        for sec_time, sec_label in section_lookup.items():
-            if abs(sec_time - beat["start"]) < 0.2:
-                add_section_text(current_measure, sec_label)
+            if alter:
+                SubElement(root, "root-alter").text = str(alter)
 
-        # chords
-        for seg in segments:
-            if seg["start_beat"] == beat["beat"]:
+            SubElement(harmony, "kind").text = kind
 
-                harmony = SubElement(current_measure, "harmony")
-
-                step, alter, kind = parse_chord_for_xml(seg["chord"])
-
-                root = SubElement(harmony, "root")
-                SubElement(root, "root-step").text = step
-
-                if alter:
-                    SubElement(root, "root-alter").text = str(alter)
-
-                SubElement(harmony, "kind").text = kind
-
-                offset = SubElement(harmony, "offset")
-                offset.text = str(beat["beat"] - 1)
+            offset = SubElement(harmony, "offset")
+            offset.text = str(seg["start_beat"] - 1)
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
 
 
 # ---------------------------
-# FETCH ALL MUSIC.AI DATA
+# FETCH MUSIC.AI DATA
 # ---------------------------
 def fetch_music_ai(job_id):
 
@@ -308,12 +219,11 @@ def fetch_music_ai(job_id):
 
     chords = requests.get(data["result"]["chords"]).json()
     beats = requests.get(data["result"]["beats"]).json()
-    sections = requests.get(data["result"]["sections"]).json()
 
     if isinstance(chords, dict):
         chords = chords["chords"]
 
-    return chords, beats, sections
+    return chords, beats
 
 
 # ---------------------------
@@ -324,15 +234,13 @@ def analyze():
 
     file = request.files["file"]
 
-    upload_res = requests.get(
+    upload = requests.get(
         "https://api.music.ai/v1/upload",
         headers={"Authorization": API_KEY}
-    )
-
-    up = upload_res.json()
+    ).json()
 
     requests.put(
-        up["uploadUrl"],
+        upload["uploadUrl"],
         data=file.read(),
         headers={"Content-Type": file.content_type}
     )
@@ -345,7 +253,7 @@ def analyze():
         },
         json={
             "workflow": WORKFLOW,
-            "params": {"Input 1": up["downloadUrl"]}
+            "params": {"Input 1": upload["downloadUrl"]}
         }
     ).json()
 
@@ -353,7 +261,7 @@ def analyze():
 
 
 # ---------------------------
-# STATUS
+# STATUS (BASE44 CRITICAL)
 # ---------------------------
 @app.route("/status/<job_id>")
 def status(job_id):
@@ -363,9 +271,10 @@ def status(job_id):
     if not data:
         return jsonify({"status": "PROCESSING"})
 
-    chords, beats, sections = data
+    chords, beats = data
 
-    segments = build_segments(chords, beats)
+    beat_grid = build_beat_grid(beats)
+    segments = build_segments(chords, beat_grid)
 
     return jsonify({
         "status": "SUCCEEDED",
@@ -384,13 +293,12 @@ def musicxml(job_id):
     if not data:
         return jsonify({"error": "Processing"}), 400
 
-    chords, beats, sections = data
+    chords, beats = data
 
     beat_grid = build_beat_grid(beats)
     segments = build_segments(chords, beat_grid)
-    mapped_sections = build_sections(sections)
 
-    xml = chords_to_musicxml(segments, mapped_sections, beat_grid)
+    xml = chords_to_musicxml(segments)
 
     return Response(
         xml,
