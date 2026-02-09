@@ -5,7 +5,7 @@ import os
 
 app = Flask(__name__)
 
-# ✅ הפעלת CORS לכל הדומיינים
+# CORS
 CORS(app, resources={r"/*": {"origins": "*"}})
 
 API_KEY = os.environ.get("API_KEY")
@@ -34,7 +34,7 @@ def analyze():
     file = request.files["file"]
     print("Received file:", file.filename)
 
-    # כרגע משתמשים ב-demo URL
+    # כרגע demo (בהמשך תחבר upload אמיתי)
     audio_url = "https://music.ai/demo.ogg"
 
     try:
@@ -56,7 +56,6 @@ def analyze():
         )
 
         job_data = job_res.json()
-        print("JOB CREATED:", job_data)
 
         if "id" not in job_data:
             return jsonify({"error": "Job creation failed", "data": job_data}), 500
@@ -85,21 +84,48 @@ def status(job_id):
 
         status_data = status_res.json()
 
-        # ✅ אם הסתיים בהצלחה
+        # ---------------------------
+        # JOB FINISHED
+        # ---------------------------
         if status_data.get("status") == "SUCCEEDED":
 
             chords_url = status_data.get("result", {}).get("chords")
 
-            if chords_url:
-                chords_res = requests.get(chords_url)
-                chords_json = chords_res.json()
+            if not chords_url:
+                return jsonify({"status": "SUCCEEDED", "chart": []})
 
-                return jsonify({
-                    "status": "SUCCEEDED",
-                    "chords": chords_json
-                })
+            chords_res = requests.get(chords_url)
+            chords_json = chords_res.json()
 
-        # ✅ אם עדיין בתהליך
+            # -------- PARSER --------
+            parsed_chords = []
+
+            for c in chords_json.get("chords", []):
+
+                chord = c.get("chord_complex_pop")
+                bass = c.get("bass")
+
+                # מוסיף slash chord אם יש בס
+                if chord:
+                    if bass:
+                        chord = f"{chord}/{bass}"
+
+                    parsed_chords.append({
+                        "time": c.get("start"),
+                        "bar": c.get("start_bar"),
+                        "beat": c.get("start_beat"),
+                        "chord": chord
+                    })
+
+            return jsonify({
+                "status": "SUCCEEDED",
+                "chart": parsed_chords,
+                "raw": chords_json   # ← שמרתי לך גם את המקורי
+            })
+
+        # ---------------------------
+        # עדיין בתהליך
+        # ---------------------------
         return jsonify({
             "status": status_data.get("status", "UNKNOWN")
         })
