@@ -83,7 +83,7 @@ def analyze():
 
 
 # ---------------------------
-# SAFE FETCH JSON
+# SAFE FETCH
 # ---------------------------
 def safe_fetch(url):
 
@@ -117,7 +117,6 @@ def fetch_music_ai(job_id):
         sections = safe_fetch(result.get("sections"))
         key = safe_fetch(result.get("key"))
 
-        # normalize
         if isinstance(chords, dict):
             chords = chords.get("chords", [])
 
@@ -156,7 +155,6 @@ def build_beat_grid(beats):
     for i, beat in enumerate(beats):
 
         start = beat["time"]
-
         end = beats[i + 1]["time"] if i < len(beats) - 1 else start + 0.5
 
         grid.append({
@@ -217,7 +215,7 @@ def build_segments(chords, beat_grid):
 
 
 # ---------------------------
-# CHORD PARSER (XML SAFE)
+# CHORD PARSER
 # ---------------------------
 def parse_chord_for_xml(chord):
 
@@ -309,6 +307,11 @@ def chords_to_musicxml(segments, sections, key_json):
     fifths, mode = parse_key(key_json)
 
     score = Element("score-partwise", version="3.1")
+
+    part_list = SubElement(score, "part-list")
+    score_part = SubElement(part_list, "score-part", id="P1")
+    SubElement(score_part, "part-name").text = "Chords"
+
     part = SubElement(score, "part", id="P1")
 
     section_counters = {"verse": 0, "chorus": 0, "pre": 0, "inst": 0}
@@ -321,6 +324,7 @@ def chords_to_musicxml(segments, sections, key_json):
 
         if i == 0:
             attr = SubElement(measure, "attributes")
+
             SubElement(attr, "divisions").text = str(divisions)
 
             key = SubElement(attr, "key")
@@ -334,8 +338,10 @@ def chords_to_musicxml(segments, sections, key_json):
         # Sections
         for sec in sections:
             if sec.get("start_bar") == bar:
+
                 direction = SubElement(measure, "direction")
                 dtype = SubElement(direction, "direction-type")
+
                 words = SubElement(dtype, "words")
                 words.set("enclosure", "rectangle")
                 words.text = map_section(sec.get("label", ""), section_counters)
@@ -367,23 +373,29 @@ def chords_to_musicxml(segments, sections, key_json):
 @app.route("/status/<job_id>")
 def status(job_id):
 
-    data = fetch_music_ai(job_id)
+    try:
 
-    if not data:
-        return jsonify({"status": "PROCESSING"})
+        data = fetch_music_ai(job_id)
 
-    chords, beats, sections, key = data
+        if not data:
+            return jsonify({"status": "PROCESSING", "chart": []})
 
-    if not beats or not chords:
-        return jsonify({"status": "PROCESSING"})
+        chords, beats, sections, key = data
 
-    beat_grid = build_beat_grid(beats)
-    segments = build_segments(chords, beat_grid)
+        if not beats or not chords:
+            return jsonify({"status": "PROCESSING", "chart": []})
 
-    return jsonify({
-        "status": "SUCCEEDED",
-        "chart": segments
-    })
+        beat_grid = build_beat_grid(beats)
+        segments = build_segments(chords, beat_grid)
+
+        return jsonify({
+            "status": "SUCCEEDED",
+            "chart": segments or []
+        })
+
+    except Exception as e:
+        print("STATUS ERROR:", e)
+        return jsonify({"status": "ERROR", "chart": []})
 
 
 # ---------------------------
@@ -392,23 +404,29 @@ def status(job_id):
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
 
-    data = fetch_music_ai(job_id)
+    try:
 
-    if not data:
-        return jsonify({"error": "Processing"}), 400
+        data = fetch_music_ai(job_id)
 
-    chords, beats, sections, key = data
+        if not data:
+            return jsonify({"error": "Processing"}), 400
 
-    beat_grid = build_beat_grid(beats)
-    segments = build_segments(chords, beat_grid)
+        chords, beats, sections, key = data
 
-    xml = chords_to_musicxml(segments, sections, key)
+        beat_grid = build_beat_grid(beats)
+        segments = build_segments(chords, beat_grid)
 
-    return Response(
-        xml,
-        mimetype="application/xml",
-        headers={"Content-Disposition": "attachment; filename=chart.musicxml"}
-    )
+        xml = chords_to_musicxml(segments, sections, key)
+
+        return Response(
+            xml,
+            mimetype="application/xml",
+            headers={"Content-Disposition": "attachment; filename=chart.musicxml"}
+        )
+
+    except Exception as e:
+        print("XML ERROR:", e)
+        return jsonify({"error": "XML generation failed"}), 500
 
 
 if __name__ == "__main__":
