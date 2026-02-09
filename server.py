@@ -50,61 +50,59 @@ def build_beat_grid(beats_json):
         grid.append({
             "start": start,
             "end": end,
-            "beat": beat["beatNum"]
+            "beat": beat["beatNum"],
+            "bar": beat.get("barNum", 0)
         })
 
     return grid
 
 
 # ---------------------------
-# FIND ACTIVE CHORD
+# FIND CHORD AT TIME
 # ---------------------------
 def find_chord_at_time(chords, time):
+
     for chord in chords:
         if chord["start"] <= time < chord["end"]:
             return chord
+
     return None
 
 
 # ---------------------------
-# BUILD SEGMENTS (FIXED)
+# BUILD SEGMENTS (CORRECTED)
 # ---------------------------
 def build_segments(chords, beat_grid):
 
     segments = []
-
-    last_chord = None
-    last_bar = None
-    last_beat = None
+    last = None
 
     for beat in beat_grid:
 
         chord = find_chord_at_time(chords, beat["start"])
 
-        chord_name = None
+        if not chord:
+            continue
 
-        if chord:
-            chord_name = pick_best_chord(chord)
+        name = pick_best_chord(chord)
 
-            if chord.get("bass"):
-                chord_name += "/" + chord["bass"]
+        if not name:
+            continue
 
-            bar = chord["start_bar"]
-            beat_num = beat["beat"]
+        if chord.get("bass"):
+            name += "/" + chord["bass"]
 
-        else:
-            bar = 0
-            beat_num = beat["beat"]
+        marker = (name, beat["bar"], beat["beat"])
 
-        if chord_name != last_chord and chord_name is not None:
+        if marker != last:
 
             segments.append({
-                "chord": chord_name,
-                "start_bar": bar,
-                "start_beat": beat_num
+                "chord": name,
+                "start_bar": beat["bar"],
+                "start_beat": beat["beat"]
             })
 
-            last_chord = chord_name
+            last = marker
 
     return segments
 
@@ -127,11 +125,7 @@ def parse_chord_for_xml(chord):
 
     step, accidental, quality = match.groups()
 
-    alter = None
-    if accidental == "#":
-        alter = 1
-    elif accidental == "b":
-        alter = -1
+    alter = 1 if accidental == "#" else -1 if accidental == "b" else None
 
     quality = quality.lower()
 
@@ -150,9 +144,11 @@ def parse_chord_for_xml(chord):
 
 
 # ---------------------------
-# MUSICXML BUILDER
+# MUSICXML BUILDER (FIXED)
 # ---------------------------
 def chords_to_musicxml(segments):
+
+    divisions = 4  # quarter note resolution
 
     score = Element("score-partwise", version="3.1")
 
@@ -169,9 +165,10 @@ def chords_to_musicxml(segments):
         measure = SubElement(part, "measure", number=str(bar + 1))
 
         if i == 0:
+
             attributes = SubElement(measure, "attributes")
 
-            SubElement(attributes, "divisions").text = "1"
+            SubElement(attributes, "divisions").text = str(divisions)
 
             key = SubElement(attributes, "key")
             SubElement(key, "fifths").text = "0"
@@ -197,71 +194,87 @@ def chords_to_musicxml(segments):
             SubElement(harmony, "kind").text = kind
 
             offset = SubElement(harmony, "offset")
-            offset.text = str(seg["start_beat"] - 1)
+            offset.text = str((seg["start_beat"] - 1) * divisions)
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
 
 
 # ---------------------------
-# FETCH MUSIC.AI DATA
+# FETCH MUSIC.AI DATA (SAFE)
 # ---------------------------
 def fetch_music_ai(job_id):
 
-    status_res = requests.get(
-        f"https://api.music.ai/api/job/{job_id}",
-        headers={"Authorization": API_KEY}
-    )
+    try:
 
-    data = status_res.json()
+        status_res = requests.get(
+            f"https://api.music.ai/api/job/{job_id}",
+            headers={"Authorization": API_KEY}
+        )
 
-    if data["status"] != "SUCCEEDED":
+        data = status_res.json()
+
+        if data.get("status") != "SUCCEEDED":
+            return None
+
+        chords = requests.get(data["result"]["chords"]).json()
+        beats = requests.get(data["result"]["beats"]).json()
+
+        if isinstance(chords, dict):
+            chords = chords.get("chords", [])
+
+        return chords, beats
+
+    except:
         return None
-
-    chords = requests.get(data["result"]["chords"]).json()
-    beats = requests.get(data["result"]["beats"]).json()
-
-    if isinstance(chords, dict):
-        chords = chords["chords"]
-
-    return chords, beats
 
 
 # ---------------------------
-# ANALYZE
+# ANALYZE (STABLE)
 # ---------------------------
 @app.route("/analyze", methods=["POST"])
 def analyze():
 
-    file = request.files["file"]
+    try:
 
-    upload = requests.get(
-        "https://api.music.ai/v1/upload",
-        headers={"Authorization": API_KEY}
-    ).json()
+        if not API_KEY:
+            return jsonify({"error": "Missing API_KEY"}), 500
 
-    requests.put(
-        upload["uploadUrl"],
-        data=file.read(),
-        headers={"Content-Type": file.content_type}
-    )
+        if "file" not in request.files:
+            return jsonify({"error": "No file uploaded"}), 400
 
-    job = requests.post(
-        "https://api.music.ai/api/job",
-        headers={
-            "Authorization": API_KEY,
-            "Content-Type": "application/json"
-        },
-        json={
-            "workflow": WORKFLOW,
-            "params": {"Input 1": upload["downloadUrl"]}
-        }
-    ).json()
+        file = request.files["file"]
 
-    return jsonify({"job_id": job["id"]})
+        upload = requests.get(
+            "https://api.music.ai/v1/upload",
+            headers={"Authorization": API_KEY}
+        ).json()
+
+        requests.put(
+            upload["uploadUrl"],
+            data=file.read(),
+            headers={"Content-Type": file.content_type or "audio/mpeg"}
+        )
+
+        job = requests.post(
+            "https://api.music.ai/api/job",
+            headers={
+                "Authorization": API_KEY,
+                "Content-Type": "application/json"
+            },
+            json={
+                "workflow": WORKFLOW,
+                "params": {"Input 1": upload["downloadUrl"]}
+            }
+        ).json()
+
+        return jsonify({"job_id": job["id"]})
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 # ---------------------------
-# STATUS (BASE44 CRITICAL)
+# STATUS
 # ---------------------------
 @app.route("/status/<job_id>")
 def status(job_id):
@@ -283,7 +296,7 @@ def status(job_id):
 
 
 # ---------------------------
-# MUSICXML DOWNLOAD
+# MUSICXML
 # ---------------------------
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
