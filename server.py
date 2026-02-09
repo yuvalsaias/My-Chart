@@ -13,7 +13,7 @@ WORKFLOW = "my-chart-recognizer"
 
 
 # ---------------------------
-# SAFE ANALYZE
+# SAFE ANALYZE (FIXED UPLOAD)
 # ---------------------------
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -27,6 +27,17 @@ def analyze():
             return jsonify({"error": "No file uploaded"}), 400
 
         file = request.files["file"]
+
+        # ---- RESET STREAM ----
+        file.stream.seek(0)
+
+        # ---- READ FILE FULLY ----
+        file_data = file.read()
+
+        if len(file_data) == 0:
+            return jsonify({"error": "Uploaded file is empty"}), 400
+
+        print("FILE SIZE:", len(file_data))
 
         # -------- REQUEST UPLOAD URL --------
         upload_res = requests.get(
@@ -46,9 +57,14 @@ def analyze():
         # -------- UPLOAD FILE --------
         put_res = requests.put(
             upload_data["uploadUrl"],
-            data=file.read(),
-            headers={"Content-Type": file.content_type or "audio/mpeg"}
+            data=file_data,
+            headers={
+                "Content-Type": file.content_type or "audio/mpeg",
+                "Content-Length": str(len(file_data))
+            }
         )
+
+        print("UPLOAD STATUS:", put_res.status_code)
 
         if put_res.status_code not in [200, 201]:
             return jsonify({
