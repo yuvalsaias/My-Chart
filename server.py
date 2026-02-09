@@ -21,16 +21,36 @@ def test():
 
 
 # ---------------------------
-# PARSE CHORD
+# PICK BEST CHORD VERSION
+# ---------------------------
+def pick_best_chord(c):
+
+    chord = c.get("chord_complex_pop")
+
+    if not chord:
+        chord = c.get("chord_simple_pop")
+
+    if not chord:
+        chord = c.get("chord_basic_pop")
+
+    return chord
+
+
+# ---------------------------
+# PROFESSIONAL CHORD PARSER
 # ---------------------------
 def parse_chord_for_xml(chord):
 
-    match = re.match(r"([A-G])([#b]?)(.*)", chord)
+    # remove slash bass for harmony root
+    if "/" in chord:
+        chord = chord.split("/")[0]
+
+    match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
 
     if not match:
-        return "C", None, "major"
+        raise ValueError(f"Cannot parse chord: {chord}")
 
-    step, accidental, rest = match.groups()
+    step, accidental, quality = match.groups()
 
     alter = None
     if accidental == "#":
@@ -38,12 +58,21 @@ def parse_chord_for_xml(chord):
     elif accidental == "b":
         alter = -1
 
-    if "min" in rest or rest.startswith("m"):
-        kind = "minor"
-    elif "maj7" in rest:
+    quality = quality.lower()
+
+    # ----- MusicXML mapping -----
+    if "maj7" in quality:
         kind = "major-seventh"
-    elif "7" in rest:
+    elif "m7" in quality:
+        kind = "minor-seventh"
+    elif quality.startswith("m"):
+        kind = "minor"
+    elif "7" in quality:
         kind = "dominant"
+    elif "dim" in quality:
+        kind = "diminished"
+    elif "aug" in quality:
+        kind = "augmented"
     else:
         kind = "major"
 
@@ -51,7 +80,7 @@ def parse_chord_for_xml(chord):
 
 
 # ---------------------------
-# BUILD GRID
+# BUILD CHORD GRID
 # ---------------------------
 def build_chord_grid(chords_list):
 
@@ -59,7 +88,7 @@ def build_chord_grid(chords_list):
 
     for c in chords_list:
 
-        chord = c.get("chord_complex_pop")
+        chord = pick_best_chord(c)
         bass = c.get("bass")
 
         if not chord:
@@ -70,6 +99,9 @@ def build_chord_grid(chords_list):
 
         bar = c.get("start_bar")
         beat = c.get("start_beat")
+
+        if bar is None or beat is None:
+            continue
 
         grid.setdefault(bar, {})
         grid[bar][beat] = chord
@@ -90,13 +122,13 @@ def chords_to_musicxml(grid):
 
     part = SubElement(score, "part", id="P1")
 
-    max_bar = max(grid.keys())
-
-    for bar in range(max_bar + 1):
+    # iterate only existing bars
+    for i, bar in enumerate(sorted(grid.keys())):
 
         measure = SubElement(part, "measure", number=str(bar + 1))
 
-        if bar == 0:
+        # attributes only in first measure
+        if i == 0:
             attributes = SubElement(measure, "attributes")
 
             SubElement(attributes, "divisions").text = "1"
@@ -108,15 +140,13 @@ def chords_to_musicxml(grid):
             SubElement(time, "beats").text = "4"
             SubElement(time, "beat-type").text = "4"
 
-        if bar not in grid:
-            continue
-
         last_chord = None
 
         for beat in sorted(grid[bar].keys()):
 
             chord = grid[bar][beat]
 
+            # show only chord changes
             if chord == last_chord:
                 continue
 
@@ -141,7 +171,7 @@ def chords_to_musicxml(grid):
 
 
 # ---------------------------
-# CREATE JOB
+# CREATE JOB (UPLOAD REAL FILE)
 # ---------------------------
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -153,7 +183,7 @@ def analyze():
 
     try:
 
-        # upload URL
+        # get upload URL
         upload_res = requests.get(
             "https://api.music.ai/v1/upload",
             headers={"Authorization": API_KEY}
@@ -164,7 +194,7 @@ def analyze():
         upload_url = upload_data["uploadUrl"]
         download_url = upload_data["downloadUrl"]
 
-        # upload file
+        # upload file bytes
         requests.put(
             upload_url,
             data=file.read(),
@@ -219,11 +249,9 @@ def fetch_chords(job_id):
     chords_json = requests.get(chords_url).json()
 
     if isinstance(chords_json, dict):
-        chords_list = chords_json.get("chords", [])
-    else:
-        chords_list = chords_json
+        return chords_json.get("chords", [])
 
-    return chords_list
+    return chords_json
 
 
 # ---------------------------
@@ -244,7 +272,7 @@ def status(job_id):
 
 
 # ---------------------------
-# MUSICXML DOWNLOAD
+# DOWNLOAD MUSICXML
 # ---------------------------
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
