@@ -13,116 +13,11 @@ WORKFLOW = "my-chart-recognizer"
 
 
 # ---------------------------
-# ANALYZE
+# TEST ROUTE
 # ---------------------------
-@app.route("/analyze", methods=["POST"])
-def analyze():
-
-    try:
-
-        if not API_KEY:
-            return jsonify({"error": "Missing API_KEY"}), 500
-
-        if "file" not in request.files:
-            return jsonify({"error": "No file uploaded"}), 400
-
-        file = request.files["file"]
-
-        file.stream.seek(0)
-        file_data = file.read()
-
-        if len(file_data) == 0:
-            return jsonify({"error": "Empty file"}), 400
-
-        # Upload URL
-        upload_res = requests.get(
-            "https://api.music.ai/v1/upload",
-            headers={"Authorization": API_KEY}
-        )
-
-        upload_data = upload_res.json()
-
-        if "uploadUrl" not in upload_data:
-            return jsonify(upload_data), 500
-
-        # Upload file
-        put_res = requests.put(
-            upload_data["uploadUrl"],
-            data=file_data,
-            headers={"Content-Type": file.content_type or "audio/mpeg"}
-        )
-
-        if put_res.status_code not in [200, 201]:
-            return jsonify({"error": "Upload failed"}), 500
-
-        # Create job
-        job_res = requests.post(
-            "https://api.music.ai/v1/job",
-            headers={
-                "Authorization": API_KEY,
-                "Content-Type": "application/json"
-            },
-            json={
-                "workflow": WORKFLOW,
-                "params": {"Input 1": upload_data["downloadUrl"]}
-            }
-        )
-
-        job_data = job_res.json()
-
-        if "id" not in job_data:
-            return jsonify(job_data), 500
-
-        return jsonify({"job_id": job_data["id"]})
-
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-
-
-# ---------------------------
-# SAFE FETCH
-# ---------------------------
-def safe_fetch(url):
-
-    try:
-        if not url:
-            return None
-        return requests.get(url).json()
-    except:
-        return None
-
-
-# ---------------------------
-# FETCH MUSIC.AI
-# ---------------------------
-def fetch_music_ai(job_id):
-
-    try:
-
-        status = requests.get(
-            f"https://api.music.ai/v1/job/{job_id}",
-            headers={"Authorization": API_KEY}
-        ).json()
-
-        if status.get("status") != "SUCCEEDED":
-            return None
-
-        result = status.get("result", {})
-
-        chords = safe_fetch(result.get("chords"))
-        beats = safe_fetch(result.get("beats"))
-
-        if isinstance(chords, dict):
-            chords = chords.get("chords", [])
-
-        if isinstance(beats, dict):
-            beats = beats.get("beats", [])
-
-        return chords or [], beats or []
-
-    except Exception as e:
-        print("FETCH ERROR:", e)
-        return None
+@app.route("/test")
+def test():
+    return "Server works!"
 
 
 # ---------------------------
@@ -138,115 +33,88 @@ def pick_best_chord(c):
 
 
 # ---------------------------
-# BUILD BEAT GRID
+# SAFE CHORD PARSER
 # ---------------------------
-def build_beat_grid(beats):
+def parse_chord_for_xml(chord):
 
-    grid = []
+    try:
 
-    for i, beat in enumerate(beats):
+        # normalize symbols
+        chord = chord.replace("Δ", "maj")
+        chord = chord.replace("-", "m")
 
-        start = beat["time"]
-        end = beats[i + 1]["time"] if i < len(beats) - 1 else start + 0.5
+        # remove slash bass
+        if "/" in chord:
+            chord = chord.split("/")[0]
 
-        grid.append({
-            "start": start,
-            "end": end,
-            "beat": beat.get("beatNum", 1),
-            "bar": beat.get("barNum", 0)
-        })
+        match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
 
-    return grid
+        if not match:
+            return "C", None, "major"
 
+        step, accidental, quality = match.groups()
 
-# ---------------------------
-# FIND CHORD AT TIME
-# ---------------------------
-def find_chord_at_time(chords, time):
+        alter = None
+        if accidental == "#":
+            alter = 1
+        elif accidental == "b":
+            alter = -1
 
-    for c in chords:
-        if c["start"] <= time < c["end"]:
-            return c
-    return None
+        quality = quality.lower()
+
+        if "maj7" in quality:
+            kind = "major-seventh"
+        elif "m7" in quality:
+            kind = "minor-seventh"
+        elif "sus" in quality:
+            kind = "suspended-fourth"
+        elif quality.startswith("m"):
+            kind = "minor"
+        elif "7" in quality:
+            kind = "dominant"
+        else:
+            kind = "major"
+
+        return step, alter, kind
+
+    except Exception as e:
+        print("CHORD PARSE ERROR:", chord, e)
+        return "C", None, "major"
 
 
 # ---------------------------
 # BUILD SEGMENTS
 # ---------------------------
-def build_segments(chords, beat_grid):
+def build_segments(chords_list):
 
     segments = []
-    last = None
 
-    for beat in beat_grid:
+    for c in chords_list:
 
-        chord = find_chord_at_time(chords, beat["start"])
+        chord = pick_best_chord(c)
+        bass = c.get("bass")
 
         if not chord:
             continue
 
-        name = pick_best_chord(chord)
+        if bass:
+            chord = f"{chord}/{bass}"
 
-        if not name:
-            continue
-
-        if chord.get("bass"):
-            name += "/" + chord["bass"]
-
-        marker = (name, beat["bar"], beat["beat"])
-
-        if marker != last:
-            segments.append({
-                "chord": name,
-                "start_bar": beat["bar"],
-                "start_beat": beat["beat"]
-            })
-            last = marker
+        segments.append({
+            "chord": chord,
+            "start_bar": c["start_bar"],
+            "start_beat": c["start_beat"],
+            "end_bar": c["end_bar"],
+            "end_beat": c["end_beat"]
+        })
 
     return segments
-
-
-# ---------------------------
-# CHORD PARSER
-# ---------------------------
-def parse_chord_for_xml(chord):
-
-    chord = chord.replace("Δ", "maj").replace("-", "m")
-
-    if "/" in chord:
-        chord = chord.split("/")[0]
-
-    m = re.match(r"^([A-G])([#b]?)(.*)$", chord)
-
-    if not m:
-        return "C", None, "major"
-
-    step, accidental, quality = m.groups()
-
-    alter = 1 if accidental == "#" else -1 if accidental == "b" else None
-
-    quality = quality.lower()
-
-    if "maj7" in quality:
-        kind = "major-seventh"
-    elif "m7" in quality:
-        kind = "minor-seventh"
-    elif quality.startswith("m"):
-        kind = "minor"
-    elif "7" in quality:
-        kind = "dominant"
-    else:
-        kind = "major"
-
-    return step, alter, kind
 
 
 # ---------------------------
 # MUSICXML BUILDER
 # ---------------------------
 def chords_to_musicxml(segments):
-
-    divisions = 4
 
     score = Element("score-partwise", version="3.1")
 
@@ -263,18 +131,20 @@ def chords_to_musicxml(segments):
         measure = SubElement(part, "measure", number=str(bar + 1))
 
         if i == 0:
+            attributes = SubElement(measure, "attributes")
 
-            attr = SubElement(measure, "attributes")
-            SubElement(attr, "divisions").text = str(divisions)
+            SubElement(attributes, "divisions").text = "1"
 
-            key = SubElement(attr, "key")
+            key = SubElement(attributes, "key")
             SubElement(key, "fifths").text = "0"
 
-            time = SubElement(attr, "time")
+            time = SubElement(attributes, "time")
             SubElement(time, "beats").text = "4"
             SubElement(time, "beat-type").text = "4"
 
-        for seg in [s for s in segments if s["start_bar"] == bar]:
+        bar_segments = [s for s in segments if s["start_bar"] == bar]
+
+        for seg in bar_segments:
 
             harmony = SubElement(measure, "harmony")
 
@@ -283,77 +153,124 @@ def chords_to_musicxml(segments):
             root = SubElement(harmony, "root")
             SubElement(root, "root-step").text = step
 
-            if alter is not None:
+            if alter:
                 SubElement(root, "root-alter").text = str(alter)
 
             SubElement(harmony, "kind").text = kind
 
             offset = SubElement(harmony, "offset")
-            offset.text = str((seg["start_beat"] - 1) * divisions)
+            offset.text = str(seg["start_beat"] - 1)
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
 
 
 # ---------------------------
-# STATUS
+# CREATE JOB
+# ---------------------------
+@app.route("/analyze", methods=["POST"])
+def analyze():
+
+    file = request.files["file"]
+
+    upload_res = requests.get(
+        "https://api.music.ai/v1/upload",
+        headers={"Authorization": API_KEY}
+    )
+
+    upload_data = upload_res.json()
+
+    upload_url = upload_data["uploadUrl"]
+    download_url = upload_data["downloadUrl"]
+
+    requests.put(
+        upload_url,
+        data=file.read(),
+        headers={"Content-Type": file.content_type}
+    )
+
+    job_res = requests.post(
+        "https://api.music.ai/api/job",
+        headers={
+            "accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": API_KEY
+        },
+        json={
+            "name": file.filename,
+            "workflow": WORKFLOW,
+            "params": {"Input 1": download_url}
+        }
+    )
+
+    job_data = job_res.json()
+
+    return jsonify({"job_id": job_data["id"]})
+
+
+# ---------------------------
+# FETCH CHORDS
+# ---------------------------
+def fetch_chords(job_id):
+
+    status_res = requests.get(
+        f"https://api.music.ai/api/job/{job_id}",
+        headers={"Authorization": API_KEY}
+    )
+
+    status_data = status_res.json()
+
+    if status_data["status"] != "SUCCEEDED":
+        return None, status_data["status"]
+
+    chords_url = status_data["result"]["chords"]
+
+    chords_json = requests.get(chords_url).json()
+
+    if isinstance(chords_json, dict):
+        return chords_json["chords"], "SUCCEEDED"
+
+    return chords_json, "SUCCEEDED"
+
+
+# ---------------------------
+# STATUS ROUTE
 # ---------------------------
 @app.route("/status/<job_id>")
 def status(job_id):
 
-    try:
+    chords, state = fetch_chords(job_id)
 
-        data = fetch_music_ai(job_id)
+    if chords is None:
+        return jsonify({"status": state})
 
-        if not data:
-            return jsonify({"status": "PROCESSING", "chart": []})
+    segments = build_segments(chords)
 
-        chords, beats = data
-
-        if not beats or not chords:
-            return jsonify({"status": "PROCESSING", "chart": []})
-
-        beat_grid = build_beat_grid(beats)
-        segments = build_segments(chords, beat_grid)
-
-        return jsonify({
-            "status": "SUCCEEDED",
-            "chart": segments or []
-        })
-
-    except Exception as e:
-        print("STATUS ERROR:", e)
-        return jsonify({"status": "ERROR", "chart": []})
+    return jsonify({
+        "status": "SUCCEEDED",
+        "chart": segments
+    })
 
 
 # ---------------------------
-# MUSICXML
+# MUSICXML DOWNLOAD
 # ---------------------------
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
 
-    try:
+    chords, state = fetch_chords(job_id)
 
-        data = fetch_music_ai(job_id)
+    if chords is None:
+        return jsonify({"error": "Processing"}), 400
 
-        if not data:
-            return jsonify({"error": "Processing"}), 400
+    segments = build_segments(chords)
 
-        chords, beats = data
+    xml_data = chords_to_musicxml(segments)
 
-        beat_grid = build_beat_grid(beats)
-        segments = build_segments(chords, beat_grid)
-
-        xml = chords_to_musicxml(segments)
-
-        return Response(
-            xml,
-            mimetype="application/xml",
-            headers={"Content-Disposition": "attachment; filename=chart.musicxml"}
-        )
-
-    except Exception as e:
-        print("XML ERROR:", e)
-        return jsonify({"error": "XML generation failed"}), 500
+    return Response(
+        xml_data,
+        mimetype="application/xml",
+        headers={"Content-Disposition": "attachment; filename=chords.musicxml"}
+    )
 
 
 if __name__ == "__main__":
