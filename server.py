@@ -28,38 +28,60 @@ def analyze():
 
         file = request.files["file"]
 
+        # -------- REQUEST UPLOAD URL --------
         upload_res = requests.get(
             "https://api.music.ai/v1/upload",
             headers={"Authorization": API_KEY}
         )
 
         upload_data = upload_res.json()
+        print("UPLOAD RESPONSE:", upload_data)
 
         if "uploadUrl" not in upload_data:
-            return jsonify({"error": "Upload URL failed", "data": upload_data}), 500
+            return jsonify({
+                "error": "Upload URL failed",
+                "music_ai_response": upload_data
+            }), 500
 
-        requests.put(
+        # -------- UPLOAD FILE --------
+        put_res = requests.put(
             upload_data["uploadUrl"],
             data=file.read(),
             headers={"Content-Type": file.content_type or "audio/mpeg"}
         )
 
+        if put_res.status_code not in [200, 201]:
+            return jsonify({
+                "error": "File upload failed",
+                "status": put_res.status_code,
+                "response": put_res.text
+            }), 500
+
+        # -------- CREATE JOB --------
         job_res = requests.post(
-            "https://api.music.ai/api/job",
+            "https://api.music.ai/v1/job",
             headers={
                 "Authorization": API_KEY,
                 "Content-Type": "application/json"
             },
             json={
+                "name": "Chord Job",
                 "workflow": WORKFLOW,
-                "params": {"Input 1": upload_data["downloadUrl"]}
+                "params": {
+                    "Input 1": upload_data["downloadUrl"]
+                }
             }
         )
+
+        print("JOB RESPONSE:", job_res.text)
 
         job_data = job_res.json()
 
         if "id" not in job_data:
-            return jsonify({"error": "Job creation failed", "data": job_data}), 500
+            return jsonify({
+                "error": "Job creation failed",
+                "music_ai_response": job_data
+            }), 500
 
         return jsonify({"job_id": job_data["id"]})
 
@@ -213,7 +235,6 @@ def parse_key(key_json):
 def chords_to_musicxml(segments, sections, key_json):
 
     divisions = 4
-
     fifths, mode = parse_key(key_json)
 
     score = Element("score-partwise", version="3.1")
@@ -260,9 +281,8 @@ def chords_to_musicxml(segments, sections, key_json):
 
             harmony = SubElement(measure, "harmony")
 
-            root_step = seg["chord"][0]
             root = SubElement(harmony, "root")
-            SubElement(root, "root-step").text = root_step
+            SubElement(root, "root-step").text = seg["chord"][0]
 
             SubElement(harmony, "kind").text = "major"
 
@@ -278,7 +298,7 @@ def chords_to_musicxml(segments, sections, key_json):
 def fetch_music_ai(job_id):
 
     status = requests.get(
-        f"https://api.music.ai/api/job/{job_id}",
+        f"https://api.music.ai/v1/job/{job_id}",
         headers={"Authorization": API_KEY}
     ).json()
 
