@@ -34,7 +34,7 @@ def analyze():
     file = request.files["file"]
     print("Received file:", file.filename)
 
-    # כרגע demo (בהמשך תחבר upload אמיתי)
+    # כרגע demo
     audio_url = "https://music.ai/demo.ogg"
 
     try:
@@ -97,15 +97,23 @@ def status(job_id):
             chords_res = requests.get(chords_url)
             chords_json = chords_res.json()
 
-            # -------- PARSER --------
+            # -------- FIX PARSER --------
+
+            # Music.ai לפעמים מחזיר dict ולפעמים list
+            if isinstance(chords_json, dict):
+                chords_list = chords_json.get("chords", [])
+            elif isinstance(chords_json, list):
+                chords_list = chords_json
+            else:
+                chords_list = []
+
             parsed_chords = []
 
-            for c in chords_json.get("chords", []):
+            for c in chords_list:
 
                 chord = c.get("chord_complex_pop")
                 bass = c.get("bass")
 
-                # מוסיף slash chord אם יש בס
                 if chord:
                     if bass:
                         chord = f"{chord}/{bass}"
@@ -120,7 +128,7 @@ def status(job_id):
             return jsonify({
                 "status": "SUCCEEDED",
                 "chart": parsed_chords,
-                "raw": chords_json   # ← שמרתי לך גם את המקורי
+                "raw": chords_json
             })
 
         # ---------------------------
