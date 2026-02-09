@@ -1,7 +1,9 @@
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 import requests
 import os
+import re
+from xml.etree.ElementTree import Element, SubElement, tostring
 
 app = Flask(__name__)
 CORS(app)
@@ -19,6 +21,126 @@ def test():
 
 
 # ---------------------------
+# PARSE CHORD
+# ---------------------------
+def parse_chord_for_xml(chord):
+
+    match = re.match(r"([A-G])([#b]?)(.*)", chord)
+
+    if not match:
+        return "C", None, "major"
+
+    step, accidental, rest = match.groups()
+
+    alter = None
+    if accidental == "#":
+        alter = 1
+    elif accidental == "b":
+        alter = -1
+
+    if "min" in rest or rest.startswith("m"):
+        kind = "minor"
+    elif "maj7" in rest:
+        kind = "major-seventh"
+    elif "7" in rest:
+        kind = "dominant"
+    else:
+        kind = "major"
+
+    return step, alter, kind
+
+
+# ---------------------------
+# BUILD GRID
+# ---------------------------
+def build_chord_grid(chords_list):
+
+    grid = {}
+
+    for c in chords_list:
+
+        chord = c.get("chord_complex_pop")
+        bass = c.get("bass")
+
+        if not chord:
+            continue
+
+        if bass:
+            chord = f"{chord}/{bass}"
+
+        bar = c.get("start_bar")
+        beat = c.get("start_beat")
+
+        grid.setdefault(bar, {})
+        grid[bar][beat] = chord
+
+    return grid
+
+
+# ---------------------------
+# MUSICXML BUILDER
+# ---------------------------
+def chords_to_musicxml(grid):
+
+    score = Element("score-partwise", version="3.1")
+
+    part_list = SubElement(score, "part-list")
+    score_part = SubElement(part_list, "score-part", id="P1")
+    SubElement(score_part, "part-name").text = "Chords"
+
+    part = SubElement(score, "part", id="P1")
+
+    max_bar = max(grid.keys())
+
+    for bar in range(max_bar + 1):
+
+        measure = SubElement(part, "measure", number=str(bar + 1))
+
+        if bar == 0:
+            attributes = SubElement(measure, "attributes")
+
+            SubElement(attributes, "divisions").text = "1"
+
+            key = SubElement(attributes, "key")
+            SubElement(key, "fifths").text = "0"
+
+            time = SubElement(attributes, "time")
+            SubElement(time, "beats").text = "4"
+            SubElement(time, "beat-type").text = "4"
+
+        if bar not in grid:
+            continue
+
+        last_chord = None
+
+        for beat in sorted(grid[bar].keys()):
+
+            chord = grid[bar][beat]
+
+            if chord == last_chord:
+                continue
+
+            last_chord = chord
+
+            harmony = SubElement(measure, "harmony")
+
+            step, alter, kind = parse_chord_for_xml(chord)
+
+            root = SubElement(harmony, "root")
+            SubElement(root, "root-step").text = step
+
+            if alter:
+                SubElement(root, "root-alter").text = str(alter)
+
+            SubElement(harmony, "kind").text = kind
+
+            offset = SubElement(harmony, "offset")
+            offset.text = str(beat - 1)
+
+    return tostring(score, encoding="utf-8", xml_declaration=True)
+
+
+# ---------------------------
 # CREATE JOB
 # ---------------------------
 @app.route("/analyze", methods=["POST"])
@@ -30,9 +152,8 @@ def analyze():
     file = request.files["file"]
 
     try:
-        # ---------------------------
-        # STEP 1 - get upload URL
-        # ---------------------------
+
+        # upload URL
         upload_res = requests.get(
             "https://api.music.ai/v1/upload",
             headers={"Authorization": API_KEY}
@@ -43,20 +164,14 @@ def analyze():
         upload_url = upload_data["uploadUrl"]
         download_url = upload_data["downloadUrl"]
 
-        # ---------------------------
-        # STEP 2 - upload file bytes
-        # ---------------------------
-        file_bytes = file.read()
-
+        # upload file
         requests.put(
             upload_url,
-            data=file_bytes,
+            data=file.read(),
             headers={"Content-Type": file.content_type}
         )
 
-        # ---------------------------
-        # STEP 3 - create job
-        # ---------------------------
+        # create job
         job_res = requests.post(
             "https://api.music.ai/api/job",
             headers={
@@ -75,9 +190,6 @@ def analyze():
 
         job_data = job_res.json()
 
-        if "id" not in job_data:
-            return jsonify(job_data), 500
-
         return jsonify({
             "status": "CREATED",
             "job_id": job_data["id"]
@@ -88,37 +200,70 @@ def analyze():
 
 
 # ---------------------------
+# FETCH CHORDS
+# ---------------------------
+def fetch_chords(job_id):
+
+    status_res = requests.get(
+        f"https://api.music.ai/api/job/{job_id}",
+        headers={"Authorization": API_KEY}
+    )
+
+    status_data = status_res.json()
+
+    if status_data.get("status") != "SUCCEEDED":
+        return None
+
+    chords_url = status_data.get("result", {}).get("chords")
+
+    chords_json = requests.get(chords_url).json()
+
+    if isinstance(chords_json, dict):
+        chords_list = chords_json.get("chords", [])
+    else:
+        chords_list = chords_json
+
+    return chords_list
+
+
+# ---------------------------
 # STATUS
 # ---------------------------
 @app.route("/status/<job_id>")
 def status(job_id):
 
-    try:
-        status_res = requests.get(
-            f"https://api.music.ai/api/job/{job_id}",
-            headers={"Authorization": API_KEY}
-        )
+    chords = fetch_chords(job_id)
 
-        status_data = status_res.json()
+    if chords is None:
+        return jsonify({"status": "PROCESSING"})
 
-        if status_data.get("status") == "SUCCEEDED":
+    return jsonify({
+        "status": "SUCCEEDED",
+        "chords": chords
+    })
 
-            chords_url = status_data.get("result", {}).get("chords")
 
-            chords_res = requests.get(chords_url)
-            chords_json = chords_res.json()
+# ---------------------------
+# MUSICXML DOWNLOAD
+# ---------------------------
+@app.route("/musicxml/<job_id>")
+def musicxml(job_id):
 
-            return jsonify({
-                "status": "SUCCEEDED",
-                "chords": chords_json
-            })
+    chords = fetch_chords(job_id)
 
-        return jsonify({
-            "status": status_data.get("status")
-        })
+    if not chords:
+        return jsonify({"error": "Job not finished"}), 400
 
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
+    grid = build_chord_grid(chords)
+    xml_data = chords_to_musicxml(grid)
+
+    return Response(
+        xml_data,
+        mimetype="application/xml",
+        headers={
+            "Content-Disposition": "attachment; filename=chords.musicxml"
+        }
+    )
 
 
 if __name__ == "__main__":
