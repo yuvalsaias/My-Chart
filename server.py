@@ -2,10 +2,11 @@ from flask import Flask, request, jsonify, Response
 from flask_cors import CORS
 import requests
 import os
+import re
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app)
 
 API_KEY = os.environ.get("API_KEY")
 WORKFLOW = "my-chart-recognizer"
@@ -20,31 +21,83 @@ def test():
 
 
 # ---------------------------
-# MUSICXML BUILDER
+# PARSE CHORD TYPE
 # ---------------------------
-def parse_chord_for_xml(chord_name):
+def parse_chord_for_xml(chord):
 
-    # root + accidental
-    root = chord_name[0]
+    match = re.match(r"([A-G])([#b]?)(.*)", chord)
+
+    if not match:
+        return "C", None, "major"
+
+    step, accidental, rest = match.groups()
+
     alter = None
-
-    if len(chord_name) > 1 and chord_name[1] == "#":
+    if accidental == "#":
         alter = 1
-    elif len(chord_name) > 1 and chord_name[1] == "b":
+    elif accidental == "b":
         alter = -1
 
-    # זיהוי סוג האקורד
-    if "min" in chord_name or "m" in chord_name:
+    if "min" in rest or rest.startswith("m"):
         kind = "minor"
-    elif "7" in chord_name:
+    elif "maj7" in rest:
+        kind = "major-seventh"
+    elif "7" in rest:
         kind = "dominant"
     else:
         kind = "major"
 
-    return root, alter, kind
+    return step, alter, kind
 
 
-def chords_to_musicxml(parsed_chords):
+# ---------------------------
+# BUILD BEAT GRID
+# ---------------------------
+def build_chord_grid(chords_list):
+
+    grid = {}
+
+    for c in chords_list:
+
+        chord = c.get("chord_complex_pop")
+        bass = c.get("bass")
+
+        if not chord:
+            continue
+
+        if bass:
+            chord = f"{chord}/{bass}"
+
+        start_bar = c.get("start_bar")
+        start_beat = c.get("start_beat")
+        end_bar = c.get("end_bar")
+        end_beat = c.get("end_beat")
+
+        bar = start_bar
+        beat = start_beat
+
+        # ממלא את כל הביטים עד סוף האקורד
+        while True:
+
+            grid.setdefault(bar, {})
+            grid[bar][beat] = chord
+
+            if bar == end_bar and beat == end_beat:
+                break
+
+            beat += 1
+
+            if beat > 4:  # הנחה 4/4 כרגע
+                beat = 1
+                bar += 1
+
+    return grid
+
+
+# ---------------------------
+# MUSICXML BUILDER
+# ---------------------------
+def chords_to_musicxml(grid):
 
     score = Element("score-partwise", version="3.1")
 
@@ -54,33 +107,55 @@ def chords_to_musicxml(parsed_chords):
 
     part = SubElement(score, "part", id="P1")
 
-    current_bar = -1
-    measure = None
+    max_bar = max(grid.keys())
 
-    for chord_data in parsed_chords:
+    for bar in range(max_bar + 1):
 
-        bar = chord_data.get("bar", 0)
-        chord_name = chord_data.get("chord")
+        measure = SubElement(part, "measure", number=str(bar + 1))
 
-        if not chord_name:
+        if bar == 0:
+            attributes = SubElement(measure, "attributes")
+            SubElement(attributes, "divisions").text = "1"
+
+            time = SubElement(attributes, "time")
+            SubElement(time, "beats").text = "4"
+            SubElement(time, "beat-type").text = "4"
+
+            key = SubElement(attributes, "key")
+            SubElement(key, "fifths").text = "0"
+
+        if bar not in grid:
             continue
 
-        # פתיחת measure חדשה
-        if bar != current_bar:
-            current_bar = bar
-            measure = SubElement(part, "measure", number=str(bar + 1))
+        beats = sorted(grid[bar].keys())
 
-        harmony = SubElement(measure, "harmony")
+        last_chord = None
 
-        root_step, alter, kind = parse_chord_for_xml(chord_name)
+        for beat in beats:
 
-        root = SubElement(harmony, "root")
-        SubElement(root, "root-step").text = root_step
+            chord = grid[bar][beat]
 
-        if alter:
-            SubElement(root, "root-alter").text = str(alter)
+            # מציג רק שינוי אקורד
+            if chord == last_chord:
+                continue
 
-        SubElement(harmony, "kind").text = kind
+            last_chord = chord
+
+            harmony = SubElement(measure, "harmony")
+
+            step, alter, kind = parse_chord_for_xml(chord)
+
+            root = SubElement(harmony, "root")
+            SubElement(root, "root-step").text = step
+
+            if alter:
+                SubElement(root, "root-alter").text = str(alter)
+
+            SubElement(harmony, "kind").text = kind
+
+            # מיקום בתוך התיבה
+            offset = SubElement(harmony, "offset")
+            offset.text = str(beat - 1)
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
 
@@ -94,7 +169,6 @@ def analyze():
     if "file" not in request.files:
         return jsonify({"error": "No file received"}), 400
 
-    # כרגע demo
     audio_url = "https://music.ai/demo.ogg"
 
     try:
@@ -130,7 +204,7 @@ def analyze():
 
 
 # ---------------------------
-# GET CHORD JSON
+# FETCH + PARSE CHORDS
 # ---------------------------
 def fetch_parsed_chords(job_id):
 
@@ -154,25 +228,7 @@ def fetch_parsed_chords(job_id):
     else:
         chords_list = chords_json
 
-    parsed = []
-
-    for c in chords_list:
-
-        chord = c.get("chord_complex_pop")
-        bass = c.get("bass")
-
-        if chord:
-            if bass:
-                chord = f"{chord}/{bass}"
-
-            parsed.append({
-                "time": c.get("start"),
-                "bar": c.get("start_bar"),
-                "beat": c.get("start_beat"),
-                "chord": chord
-            })
-
-    return parsed
+    return build_chord_grid(chords_list)
 
 
 # ---------------------------
@@ -181,14 +237,14 @@ def fetch_parsed_chords(job_id):
 @app.route("/status/<job_id>")
 def status(job_id):
 
-    parsed = fetch_parsed_chords(job_id)
+    grid = fetch_parsed_chords(job_id)
 
-    if parsed is None:
+    if grid is None:
         return jsonify({"status": "PROCESSING"})
 
     return jsonify({
         "status": "SUCCEEDED",
-        "chart": parsed
+        "grid": grid
     })
 
 
@@ -198,12 +254,12 @@ def status(job_id):
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
 
-    parsed = fetch_parsed_chords(job_id)
+    grid = fetch_parsed_chords(job_id)
 
-    if not parsed:
+    if not grid:
         return jsonify({"error": "Job not finished"}), 400
 
-    xml_data = chords_to_musicxml(parsed)
+    xml_data = chords_to_musicxml(grid)
 
     return Response(
         xml_data,
@@ -212,10 +268,6 @@ def musicxml(job_id):
             "Content-Disposition": "attachment; filename=chords.musicxml"
         }
     )
-
-
-print("REGISTERED ROUTES:")
-print(app.url_map)
 
 
 if __name__ == "__main__":
