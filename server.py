@@ -273,7 +273,19 @@ def chords_to_musicxml(segments, sections=None, bpm=None):
                     rehearsal = SubElement(direction_type, "rehearsal")
                     rehearsal.text = label
 
-        bar_segments = [s for s in segments if s["start_bar"] <= bar <= s["end_bar"]]
+        # אקורדים שמתחילים בתיבה הזו
+        starting_here = [s for s in segments if s["start_bar"] == bar]
+
+        # אקורדים שנמשכים לתיבה הזו
+        continuing_here = [
+            s for s in segments
+            if s["start_bar"] < bar <= s["end_bar"]
+        ]
+
+        if starting_here:
+            bar_segments = starting_here
+        else:
+            bar_segments = continuing_here
 
         for seg in bar_segments:
             parsed = parse_chord_for_xml(seg["chord"])
