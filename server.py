@@ -25,11 +25,17 @@ def test():
 # ---------------------------
 def pick_best_chord(c):
 
-    return (
+    chord = (
         c.get("chord_complex_pop")
         or c.get("chord_simple_pop")
         or c.get("chord_basic_pop")
     )
+
+    # אם זה "N" (no chord) – מתעלמים ממנו לגמרי
+    if chord in (None, "N"):
+        return None
+
+    return chord
 
 
 # ---------------------------
@@ -50,9 +56,9 @@ def parse_chord_for_xml(chord):
 
         match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
 
+        # אם לא מצליחים לפרש – לא מחזירים כלום (לא C)
         if not match:
-            # שומר על ההתנהגות המקורית שלך (fallback ל-C)
-            return "C", None, "major", [], bass_note, original
+            return None
 
         step, accidental, quality = match.groups()
 
@@ -118,7 +124,8 @@ def parse_chord_for_xml(chord):
 
     except Exception as e:
         print("CHORD PARSE ERROR:", chord, e)
-        return "C", None, "major", [], None, chord
+        # גם בשגיאה – לא מחזירים C
+        return None
 
 
 # ---------------------------
@@ -133,6 +140,7 @@ def build_segments(chords_list):
         chord = pick_best_chord(c)
         bass = c.get("bass")
 
+        # אם אין אקורד (או N) – מדלגים
         if not chord:
             continue
 
@@ -162,7 +170,8 @@ def build_segments(chords_list):
 def quantize_segments_to_beats(segments, beats):
     """
     מיישר את תחילת האקורדים לפעמות לפי Beats.json.
-    משתמש בזמן בשניות (start_sec) כדי לבחור את הפעמה הקרובה קדימה.
+    משתמש בזמן בשניות (start_sec) כדי לבחור את הפעמה הקרובה ביותר.
+    זה גם מונע בלבול בקדמה (2 פעמות לפני תחילת התיבה המלאה).
     """
     if not beats:
         return segments
@@ -172,13 +181,13 @@ def quantize_segments_to_beats(segments, beats):
         if t is None:
             continue
 
-        # מחפשים את הפעמה הראשונה בזמן >= זמן האקורד
-        candidates = [b for b in beats if b.get("time") is not None and b["time"] >= t]
-        if not candidates:
-            continue
+        # מחפשים את הפעמה הקרובה ביותר בזמן (לא רק קדימה)
+        closest = min(
+            beats,
+            key=lambda b: abs((b.get("time") or 0) - t)
+        )
 
-        beat = min(candidates, key=lambda b: b["time"])
-        seg["start_beat"] = beat["beatNum"]
+        seg["start_beat"] = closest["beatNum"]
 
     return segments
 
@@ -279,9 +288,14 @@ def chords_to_musicxml(segments, sections=None, bpm=None):
 
         for seg in bar_segments:
 
-            harmony = SubElement(measure, "harmony")
+            parsed = parse_chord_for_xml(seg["chord"])
+            # אם לא הצלחנו לפרש – לא יוצרים אקורד בכלל
+            if not parsed:
+                continue
 
-            step, alter, kind, degrees, bass_note, original = parse_chord_for_xml(seg["chord"])
+            step, alter, kind, degrees, bass_note, original = parsed
+
+            harmony = SubElement(measure, "harmony")
 
             # ----- root -----
             root = SubElement(harmony, "root")
@@ -450,10 +464,10 @@ def musicxml(job_id):
     if chords is None:
         return jsonify({"error": "Processing"}), 400
 
-    # בונים סגמנטים מהאקורדים
+    # בונים סגמנטים מהאקורדים (בלי N)
     segments = build_segments(chords)
 
-    # מיישרים לפעמות לפי Beats.json
+    # מיישרים לפעמות לפי Beats.json (כולל קדמה)
     segments = quantize_segments_to_beats(segments, beats)
 
     # ממפים Sections (בשניות) לתיבות לפי chords.json
