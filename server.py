@@ -372,6 +372,34 @@ def fetch_analysis(job_id):
 
     return chords, sections, beats, bpm, "SUCCEEDED"
 
+# ---------------------------
+# STATUS ROUTE (/status/<job_id>)
+# ---------------------------
+@app.route("/status/<job_id>")
+def status(job_id):
+
+    chords, sections, beats, bpm, state = fetch_analysis(job_id)
+
+    # אם עדיין לא סיים לעבד
+    if chords is None:
+        return jsonify({"status": state})
+
+    # בונים סגמנטים (ל־chart של Base44)
+    segments = build_segments(chords)
+
+    response = {
+        "status": "SUCCEEDED",
+        "chart": segments
+    }
+
+    if sections is not None:
+        response["sections"] = sections
+
+    if bpm is not None:
+        response["bpm"] = bpm
+
+    return jsonify(response)
+
 
 # ---------------------------
 # MUSICXML ROUTE
