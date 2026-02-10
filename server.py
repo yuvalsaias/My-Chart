@@ -198,7 +198,7 @@ def expand_segments_across_bars(segments):
 # ---------------------------
 # MUSICXML BUILDER
 # ---------------------------
-def chords_to_musicxml(segments):
+def chords_to_musicxml(segments, sections=None):
 
     score = Element("score-partwise", version="3.1")
 
@@ -225,6 +225,22 @@ def chords_to_musicxml(segments):
             time = SubElement(attributes, "time")
             SubElement(time, "beats").text = "4"
             SubElement(time, "beat-type").text = "4"
+
+        # הוספת סימוני מבנה (sections) בתחילת המידה הרלוונטית
+        if sections:
+            for sec in sections:
+                sec_start_bar = sec.get("start_bar")
+                if sec_start_bar == bar:
+                    label = (
+                        sec.get("label")
+                        or sec.get("name")
+                        or sec.get("section")
+                        or "Section"
+                    )
+                    direction = SubElement(measure, "direction", placement="above")
+                    direction_type = SubElement(direction, "direction-type")
+                    rehearsal = SubElement(direction_type, "rehearsal")
+                    rehearsal.text = label
 
         bar_segments = [s for s in segments if s["start_bar"] == bar]
 
@@ -317,38 +333,54 @@ def fetch_chords(job_id):
     status_data = status_res.json()
 
     if status_data["status"] != "SUCCEEDED":
-        return None, status_data["status"]
+        return None, None, status_data["status"]
 
     chords_url = status_data["result"]["chords"]
+    sections_url = status_data["result"].get("sections")
 
     chords_json = requests.get(chords_url).json()
 
     if isinstance(chords_json, dict):
-        return chords_json["chords"], "SUCCEEDED"
+        chords = chords_json.get("chords", [])
+    else:
+        chords = chords_json
 
-    return chords_json, "SUCCEEDED"
+    sections = None
+    if sections_url:
+        sections_json = requests.get(sections_url).json()
+        if isinstance(sections_json, dict) and "sections" in sections_json:
+            sections = sections_json["sections"]
+        else:
+            sections = sections_json
+
+    return chords, sections, "SUCCEEDED"
 
 
 @app.route("/status/<job_id>")
 def status(job_id):
 
-    chords, state = fetch_chords(job_id)
+    chords, sections, state = fetch_chords(job_id)
 
     if chords is None:
         return jsonify({"status": state})
 
     segments = build_segments(chords)
 
-    return jsonify({
+    response = {
         "status": "SUCCEEDED",
         "chart": segments
-    })
+    }
+
+    if sections is not None:
+        response["sections"] = sections
+
+    return jsonify(response)
 
 
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
 
-    chords, state = fetch_chords(job_id)
+    chords, sections, state = fetch_chords(job_id)
 
     if chords is None:
         return jsonify({"error": "Processing"}), 400
@@ -357,7 +389,7 @@ def musicxml(job_id):
     segments = build_harmonic_timeline(segments)
     segments = expand_segments_across_bars(segments)
 
-    xml_data = chords_to_musicxml(segments)
+    xml_data = chords_to_musicxml(segments, sections)
 
     return Response(
         xml_data,
