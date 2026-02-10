@@ -13,6 +13,49 @@ WORKFLOW = "my-chart-recognizer"
 
 
 # ---------------------------
+# CREATE JOB (/analyze)
+# ---------------------------
+@app.route("/analyze", methods=["POST"])
+def analyze():
+
+    file = request.files["file"]
+
+    upload_res = requests.get(
+        "https://api.music.ai/v1/upload",
+        headers={"Authorization": API_KEY}
+    )
+
+    upload_data = upload_res.json()
+
+    upload_url = upload_data["uploadUrl"]
+    download_url = upload_data["downloadUrl"]
+
+    requests.put(
+        upload_url,
+        data=file.read(),
+        headers={"Content-Type": file.content_type}
+    )
+
+    job_res = requests.post(
+        "https://api.music.ai/api/job",
+        headers={
+            "accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": API_KEY
+        },
+        json={
+            "name": file.filename,
+            "workflow": WORKFLOW,
+            "params": {"Input 1": download_url}
+        }
+    )
+
+    job_data = job_res.json()
+
+    return jsonify({"job_id": job_data["id"]})
+
+
+# ---------------------------
 # PICK BEST CHORD
 # ---------------------------
 def pick_best_chord(c):
@@ -143,7 +186,7 @@ def detect_pickup_beats(chords):
 
 
 # ---------------------------
-# SHIFT BAR 0 → BAR 1 (REAL FIRST MEASURE)
+# SHIFT BAR 0 → BAR 1
 # ---------------------------
 def shift_segments_after_pickup(segments):
     for seg in segments:
@@ -153,7 +196,7 @@ def shift_segments_after_pickup(segments):
 
 
 # ---------------------------
-# QUANTIZE (AFTER PICKUP ONLY)
+# QUANTIZE
 # ---------------------------
 def quantize_segments_to_beats(segments, beats, pickup_beats):
     if not beats:
@@ -198,7 +241,7 @@ def map_sections_to_bars(sections, chords):
         first = min(candidates, key=lambda c: c["start"])
         mapped.append({
             "label": sec.get("label") or "Section",
-            "start_bar": first["start_bar"] + 1  # shift because bar0→bar1
+            "start_bar": first["start_bar"] + 1
         })
 
     return mapped
@@ -219,9 +262,6 @@ def chords_to_musicxml(segments, sections=None, bpm=None, pickup_beats=0):
 
     bars = sorted(set(s["start_bar"] for s in segments))
 
-    # ---------------------------
-    # MEASURE 0 — PICKUP
-    # ---------------------------
     measure0 = SubElement(part, "measure", number="0")
 
     attributes0 = SubElement(measure0, "attributes")
@@ -243,9 +283,6 @@ def chords_to_musicxml(segments, sections=None, bpm=None, pickup_beats=0):
         sound = SubElement(direction, "sound")
         sound.set("tempo", str(bpm))
 
-    # ---------------------------
-    # REGULAR MEASURES
-    # ---------------------------
     for bar in bars:
         if bar == 0:
             continue
