@@ -13,25 +13,15 @@ WORKFLOW = "my-chart-recognizer"
 
 
 # ---------------------------
-# TEST ROUTE
-# ---------------------------
-@app.route("/test")
-def test():
-    return "Server works!"
-
-
-# ---------------------------
 # PICK BEST CHORD
 # ---------------------------
 def pick_best_chord(c):
-
     chord = (
         c.get("chord_complex_pop")
         or c.get("chord_simple_pop")
         or c.get("chord_basic_pop")
     )
 
-    # אם זה "N" (no chord) – מתעלמים ממנו לגמרי
     if chord in (None, "N"):
         return None
 
@@ -39,30 +29,24 @@ def pick_best_chord(c):
 
 
 # ---------------------------
-# ADVANCED CHORD PARSER
+# PARSE CHORD
 # ---------------------------
 def parse_chord_for_xml(chord):
-
     try:
         original = chord
 
-        # -------- slash bass --------
         bass_note = None
         if "/" in chord:
             chord, bass_note = chord.split("/")
 
-        # -------- normalize --------
         chord = chord.replace("-", "m")
 
         match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
-
-        # אם לא מצליחים לפרש – לא מחזירים כלום (לא C)
         if not match:
             return None
 
         step, accidental, quality = match.groups()
 
-        # -------- accidental --------
         alter = None
         if accidental == "#":
             alter = 1
@@ -71,7 +55,6 @@ def parse_chord_for_xml(chord):
 
         q = quality.lower()
 
-        # -------- chord kind --------
         if "m7b5" in q or "ø" in q:
             kind = "half-diminished"
         elif "dim" in q:
@@ -93,7 +76,6 @@ def parse_chord_for_xml(chord):
         else:
             kind = "major"
 
-        # -------- extensions / alterations --------
         degrees = []
 
         def add_degree(val, dtype="add", alter_val=None):
@@ -101,30 +83,22 @@ def parse_chord_for_xml(chord):
 
         if "b5" in q:
             add_degree(5, "alter", "-1")
-
         if "#5" in q:
             add_degree(5, "alter", "1")
-
         if "b9" in q:
             add_degree(9, "alter", "-1")
-
         if "#9" in q:
             add_degree(9, "alter", "1")
-
         if "11" in q:
             add_degree(11)
-
         if "13" in q:
             add_degree(13)
-
         if "9" in q and "b9" not in q and "#9" not in q:
             add_degree(9)
 
         return step, alter, kind, degrees, bass_note, original
 
-    except Exception as e:
-        print("CHORD PARSE ERROR:", chord, e)
-        # גם בשגיאה – לא מחזירים C
+    except:
         return None
 
 
@@ -132,15 +106,12 @@ def parse_chord_for_xml(chord):
 # BUILD SEGMENTS
 # ---------------------------
 def build_segments(chords_list):
-
     segments = []
 
     for c in chords_list:
-
         chord = pick_best_chord(c)
         bass = c.get("bass")
 
-        # אם אין אקורד (או N) – מדלגים
         if not chord:
             continue
 
@@ -155,7 +126,6 @@ def build_segments(chords_list):
             "end_beat": c["end_beat"],
         }
 
-        # שימור זמן בשניות מה-chords.json
         if "start" in c:
             seg["start_sec"] = c["start"]
 
@@ -165,41 +135,38 @@ def build_segments(chords_list):
 
 
 # ---------------------------
-# QUANTIZE SEGMENTS TO BEATS
+# DETECT PICKUP LENGTH
 # ---------------------------
-def quantize_segments_to_beats(segments, beats):
-    """
-    מיישר את תחילת האקורדים לפעמות לפי Beats.json.
-    משתמש בזמן בשניות (start_sec) כדי לבחור את הפעמה הקרובה ביותר.
-    זה גם מונע בלבול בקדמה (2 פעמות לפני תחילת התיבה המלאה).
-    """
+def detect_pickup_beats(chords):
+    first = min(chords, key=lambda c: c["start_bar"])
+    return first["start_beat"] - 1
+
+
+# ---------------------------
+# QUANTIZE (AFTER PICKUP ONLY)
+# ---------------------------
+def quantize_segments_to_beats(segments, beats, pickup_beats):
     if not beats:
         return segments
 
     for seg in segments:
+        if seg["start_bar"] == 0:
+            continue
+
         t = seg.get("start_sec")
         if t is None:
             continue
 
-        # מחפשים את הפעמה הקרובה ביותר בזמן (לא רק קדימה)
-        closest = min(
-            beats,
-            key=lambda b: abs((b.get("time") or 0) - t)
-        )
-
+        closest = min(beats, key=lambda b: abs((b.get("time") or 0) - t))
         seg["start_beat"] = closest["beatNum"]
 
     return segments
 
 
 # ---------------------------
-# MAP SECTIONS (SECONDS) TO BARS
+# MAP SECTIONS
 # ---------------------------
 def map_sections_to_bars(sections, chords):
-    """
-    ממפה כל section (start בשניות) לתיבה (start_bar)
-    על בסיס זמן ההתחלה של האקורדים ב-chords.json.
-    """
     if not sections or not chords:
         return None
 
@@ -220,13 +187,9 @@ def map_sections_to_bars(sections, chords):
 
         first = min(candidates, key=lambda c: c["start"])
         bar = first.get("start_bar")
-        if bar is None:
-            continue
-
-        label = sec.get("label") or "Section"
 
         mapped.append({
-            "label": label,
+            "label": sec.get("label") or "Section",
             "start_bar": bar
         })
 
@@ -236,7 +199,7 @@ def map_sections_to_bars(sections, chords):
 # ---------------------------
 # MUSICXML BUILDER
 # ---------------------------
-def chords_to_musicxml(segments, sections=None, bpm=None):
+def chords_to_musicxml(segments, sections=None, bpm=None, pickup_beats=0):
 
     score = Element("score-partwise", version="3.1")
 
@@ -248,48 +211,51 @@ def chords_to_musicxml(segments, sections=None, bpm=None):
 
     bars = sorted(set(s["start_bar"] for s in segments))
 
-    for i, bar in enumerate(bars):
+    # ---------------------------
+    # MEASURE 0 — PICKUP
+    # ---------------------------
+    measure0 = SubElement(part, "measure", number="0")
 
-        measure = SubElement(part, "measure", number=str(bar + 1))
+    attributes0 = SubElement(measure0, "attributes")
+    SubElement(attributes0, "divisions").text = "1"
 
-        if i == 0:
-            attributes = SubElement(measure, "attributes")
+    time0 = SubElement(attributes0, "time")
+    SubElement(time0, "beats").text = "4"
+    SubElement(time0, "beat-type").text = "4"
 
-            SubElement(attributes, "divisions").text = "1"
+    ms = SubElement(attributes0, "measure-style")
+    ms.set("type", "pickup")
 
-            key = SubElement(attributes, "key")
-            SubElement(key, "fifths").text = "0"
+    if bpm is not None:
+        direction = SubElement(measure0, "direction", placement="above")
+        direction_type = SubElement(direction, "direction-type")
+        metronome = SubElement(direction_type, "metronome")
+        SubElement(metronome, "beat-unit").text = "quarter"
+        SubElement(metronome, "per-minute").text = str(bpm)
+        sound = SubElement(direction, "sound")
+        sound.set("tempo", str(bpm))
 
-            time = SubElement(attributes, "time")
-            SubElement(time, "beats").text = "4"
-            SubElement(time, "beat-type").text = "4"
+    # ---------------------------
+    # REGULAR MEASURES
+    # ---------------------------
+    for bar in bars:
+        if bar == 0:
+            continue
 
-            # טמפו מה-BPM
-            if bpm is not None:
-                direction = SubElement(measure, "direction", placement="above")
-                direction_type = SubElement(direction, "direction-type")
-                metronome = SubElement(direction_type, "metronome")
-                SubElement(metronome, "beat-unit").text = "quarter"
-                SubElement(metronome, "per-minute").text = str(bpm)
-                sound = SubElement(direction, "sound")
-                sound.set("tempo", str(bpm))
+        measure = SubElement(part, "measure", number=str(bar))
 
-        # כותרות מבנה (Sections) בתחילת התיבה
         if sections:
             for sec in sections:
-                if sec.get("start_bar") == bar:
-                    label = sec.get("label") or "Section"
+                if sec["start_bar"] == bar:
                     direction = SubElement(measure, "direction", placement="above")
                     direction_type = SubElement(direction, "direction-type")
                     rehearsal = SubElement(direction_type, "rehearsal")
-                    rehearsal.text = label
+                    rehearsal.text = sec["label"]
 
         bar_segments = [s for s in segments if s["start_bar"] == bar]
 
         for seg in bar_segments:
-
             parsed = parse_chord_for_xml(seg["chord"])
-            # אם לא הצלחנו לפרש – לא יוצרים אקורד בכלל
             if not parsed:
                 continue
 
@@ -297,35 +263,27 @@ def chords_to_musicxml(segments, sections=None, bpm=None):
 
             harmony = SubElement(measure, "harmony")
 
-            # ----- root -----
             root = SubElement(harmony, "root")
             SubElement(root, "root-step").text = step
 
             if alter is not None:
                 SubElement(root, "root-alter").text = str(alter)
 
-            # ----- kind -----
             kind_el = SubElement(harmony, "kind")
             kind_el.text = kind
             kind_el.set("text", original)
 
-            # ----- bass -----
             if bass_note:
                 bass = SubElement(harmony, "bass")
                 SubElement(bass, "bass-step").text = bass_note[0]
 
-            # ----- degrees -----
             for value, dtype, alter_val in degrees:
-
                 degree = SubElement(harmony, "degree")
-
                 SubElement(degree, "degree-value").text = value
                 SubElement(degree, "degree-type").text = dtype
-
                 if alter_val is not None:
                     SubElement(degree, "degree-alter").text = alter_val
 
-            # ----- offset -----
             offset = SubElement(harmony, "offset")
             offset.text = str(seg["start_beat"] - 1)
 
@@ -333,50 +291,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None):
 
 
 # ---------------------------
-# CREATE JOB
-# ---------------------------
-@app.route("/analyze", methods=["POST"])
-def analyze():
-
-    file = request.files["file"]
-
-    upload_res = requests.get(
-        "https://api.music.ai/v1/upload",
-        headers={"Authorization": API_KEY}
-    )
-
-    upload_data = upload_res.json()
-
-    upload_url = upload_data["uploadUrl"]
-    download_url = upload_data["downloadUrl"]
-
-    requests.put(
-        upload_url,
-        data=file.read(),
-        headers={"Content-Type": file.content_type}
-    )
-
-    job_res = requests.post(
-        "https://api.music.ai/api/job",
-        headers={
-            "accept": "application/json",
-            "Content-Type": "application/json",
-            "Authorization": API_KEY
-        },
-        json={
-            "name": file.filename,
-            "workflow": WORKFLOW,
-            "params": {"Input 1": download_url}
-        }
-    )
-
-    job_data = job_res.json()
-
-    return jsonify({"job_id": job_data["id"]})
-
-
-# ---------------------------
-# FETCH ANALYSIS (CHORDS + SECTIONS + BEATS + BPM)
+# FETCH ANALYSIS
 # ---------------------------
 def fetch_analysis(job_id):
 
@@ -397,64 +312,24 @@ def fetch_analysis(job_id):
     sections_url = result.get("Sections") or result.get("sections")
     bpm_val = result.get("Bpm") or result.get("bpm")
 
-    # --- chords ---
     chords_json = requests.get(chords_url).json()
-    if isinstance(chords_json, dict):
-        chords = chords_json.get("chords", chords_json)
-    else:
-        chords = chords_json
+    chords = chords_json.get("chords", chords_json)
 
-    # --- beats ---
-    beats = None
-    if beats_url:
-        beats = requests.get(beats_url).json()
+    beats = requests.get(beats_url).json() if beats_url else None
+    sections = requests.get(sections_url).json() if sections_url else None
 
-    # --- sections ---
-    sections = None
-    if sections_url:
-        sections_json = requests.get(sections_url).json()
-        sections = sections_json
-
-    # --- bpm ---
     bpm = None
-    if bpm_val is not None:
+    if bpm_val:
         try:
             bpm = float(bpm_val)
-        except Exception:
+        except:
             bpm = None
 
     return chords, sections, beats, bpm, "SUCCEEDED"
 
 
 # ---------------------------
-# STATUS ROUTE
-# ---------------------------
-@app.route("/status/<job_id>")
-def status(job_id):
-
-    chords, sections, beats, bpm, state = fetch_analysis(job_id)
-
-    if chords is None:
-        return jsonify({"status": state})
-
-    segments = build_segments(chords)
-
-    response = {
-        "status": "SUCCEEDED",
-        "chart": segments
-    }
-
-    if sections is not None:
-        response["sections"] = sections
-
-    if bpm is not None:
-        response["bpm"] = bpm
-
-    return jsonify(response)
-
-
-# ---------------------------
-# MUSICXML DOWNLOAD
+# MUSICXML ROUTE
 # ---------------------------
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
@@ -464,17 +339,15 @@ def musicxml(job_id):
     if chords is None:
         return jsonify({"error": "Processing"}), 400
 
-    # בונים סגמנטים מהאקורדים (בלי N)
     segments = build_segments(chords)
 
-    # מיישרים לפעמות לפי Beats.json (כולל קדמה)
-    segments = quantize_segments_to_beats(segments, beats)
+    pickup_beats = detect_pickup_beats(chords)
 
-    # ממפים Sections (בשניות) לתיבות לפי chords.json
+    segments = quantize_segments_to_beats(segments, beats, pickup_beats)
+
     mapped_sections = map_sections_to_bars(sections, chords) if sections else None
 
-    # בונים MusicXML עם אקורדים מיושרים, כותרות מבנה וטמפו
-    xml_data = chords_to_musicxml(segments, mapped_sections, bpm)
+    xml_data = chords_to_musicxml(segments, mapped_sections, bpm, pickup_beats)
 
     return Response(
         xml_data,
