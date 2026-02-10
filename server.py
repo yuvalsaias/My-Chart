@@ -358,7 +358,18 @@ def fetch_analysis(job_id):
     bpm_val = result.get("Bpm") or result.get("bpm")
 
     chords_json = requests.get(chords_url).json()
-    chords = chords_json.get("chords", chords_json)
+
+# אם זה dict עם מפתח "chords"
+if isinstance(chords_json, dict) and "chords" in chords_json:
+    chords = chords_json["chords"]
+# אם זה כבר list
+elif isinstance(chords_json, list):
+    chords = chords_json
+# כל דבר אחר – נכשלים בצורה בטוחה
+else:
+    chords = []
+
+
 
     beats = requests.get(beats_url).json() if beats_url else None
     sections = requests.get(sections_url).json() if sections_url else None
