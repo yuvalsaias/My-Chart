@@ -13,6 +13,14 @@ WORKFLOW = "my-chart-recognizer"
 
 
 # ---------------------------
+# TEST ROUTE
+# ---------------------------
+@app.route("/test")
+def test():
+    return "Server works!"
+
+
+# ---------------------------
 # PICK BEST CHORD
 # ---------------------------
 def pick_best_chord(c):
@@ -22,6 +30,7 @@ def pick_best_chord(c):
         or c.get("chord_basic_pop")
     )
 
+    # מתעלמים מ-N (no chord)
     if chord in (None, "N"):
         return None
 
@@ -29,7 +38,7 @@ def pick_best_chord(c):
 
 
 # ---------------------------
-# PARSE CHORD
+# PARSE CHORD FOR MUSICXML
 # ---------------------------
 def parse_chord_for_xml(chord):
     try:
@@ -98,7 +107,8 @@ def parse_chord_for_xml(chord):
 
         return step, alter, kind, degrees, bass_note, original
 
-    except:
+    except Exception as e:
+        print("CHORD PARSE ERROR:", chord, e)
         return None
 
 
@@ -135,21 +145,35 @@ def build_segments(chords_list):
 
 
 # ---------------------------
-# DETECT PICKUP LENGTH
+# DETECT PICKUP (קדמה)
 # ---------------------------
 def detect_pickup_beats(chords):
-    first = min(chords, key=lambda c: c["start_bar"])
-    return first["start_beat"] - 1
+    """
+    מזהה כמה פעמות חסרות בתחילת השיר (קדמה)
+    לפי האקורד הראשון: pickup_beats = start_beat - 1
+    """
+    if not chords:
+        return 0
+
+    first = min(chords, key=lambda c: (c["start_bar"], c["start_beat"]))
+    start_beat = first.get("start_beat", 1)
+    pickup_beats = max(0, start_beat - 1)
+    return pickup_beats
 
 
 # ---------------------------
-# QUANTIZE (AFTER PICKUP ONLY)
+# QUANTIZE SEGMENTS TO BEATS (אחרי הקדמה)
 # ---------------------------
 def quantize_segments_to_beats(segments, beats, pickup_beats):
+    """
+    מיישר את תחילת האקורדים לפעמות לפי Beats.json,
+    אבל לא נוגע באקורדים שבתיבת הקדמה (start_bar == 0).
+    """
     if not beats:
         return segments
 
     for seg in segments:
+        # לא נוגעים בקדמה
         if seg["start_bar"] == 0:
             continue
 
@@ -164,9 +188,13 @@ def quantize_segments_to_beats(segments, beats, pickup_beats):
 
 
 # ---------------------------
-# MAP SECTIONS
+# MAP SECTIONS TO BARS
 # ---------------------------
 def map_sections_to_bars(sections, chords):
+    """
+    ממפה כל section (start בשניות) לתיבה (start_bar)
+    על בסיס זמן ההתחלה של האקורדים ב-chords.json.
+    """
     if not sections or not chords:
         return None
 
@@ -187,6 +215,8 @@ def map_sections_to_bars(sections, chords):
 
         first = min(candidates, key=lambda c: c["start"])
         bar = first.get("start_bar")
+        if bar is None:
+            continue
 
         mapped.append({
             "label": sec.get("label") or "Section",
@@ -209,6 +239,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, pickup_beats=0):
 
     part = SubElement(score, "part", id="P1")
 
+    # כל התיבות שיש בהן אקורדים
     bars = sorted(set(s["start_bar"] for s in segments))
 
     # ---------------------------
@@ -226,6 +257,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, pickup_beats=0):
     ms = SubElement(attributes0, "measure-style")
     ms.set("type", "pickup")
 
+    # טמפו בתיבת הקדמה
     if bpm is not None:
         direction = SubElement(measure0, "direction", placement="above")
         direction_type = SubElement(direction, "direction-type")
@@ -236,14 +268,17 @@ def chords_to_musicxml(segments, sections=None, bpm=None, pickup_beats=0):
         sound.set("tempo", str(bpm))
 
     # ---------------------------
-    # REGULAR MEASURES
+    # REGULAR MEASURES (1,2,3...)
     # ---------------------------
     for bar in bars:
+        # את הקדמה כבר טיפלנו ב-measure 0
         if bar == 0:
             continue
 
+        # מספר התיבה ב-MusicXML = bar (כי bar 0 → measure 0, bar 1 → measure 1 וכו')
         measure = SubElement(part, "measure", number=str(bar))
 
+        # כותרות Sections
         if sections:
             for sec in sections:
                 if sec["start_bar"] == bar:
@@ -291,7 +326,50 @@ def chords_to_musicxml(segments, sections=None, bpm=None, pickup_beats=0):
 
 
 # ---------------------------
-# FETCH ANALYSIS
+# CREATE JOB (/analyze)
+# ---------------------------
+@app.route("/analyze", methods=["POST"])
+def analyze():
+
+    file = request.files["file"]
+
+    upload_res = requests.get(
+        "https://api.music.ai/v1/upload",
+        headers={"Authorization": API_KEY}
+    )
+
+    upload_data = upload_res.json()
+
+    upload_url = upload_data["uploadUrl"]
+    download_url = upload_data["downloadUrl"]
+
+    requests.put(
+        upload_url,
+        data=file.read(),
+        headers={"Content-Type": file.content_type}
+    )
+
+    job_res = requests.post(
+        "https://api.music.ai/api/job",
+        headers={
+            "accept": "application/json",
+            "Content-Type": "application/json",
+            "Authorization": API_KEY
+        },
+        json={
+            "name": file.filename,
+            "workflow": WORKFLOW,
+            "params": {"Input 1": download_url}
+        }
+    )
+
+    job_data = job_res.json()
+
+    return jsonify({"job_id": job_data["id"]})
+
+
+# ---------------------------
+# FETCH ANALYSIS (CHORDS + SECTIONS + BEATS + BPM)
 # ---------------------------
 def fetch_analysis(job_id):
 
@@ -312,24 +390,59 @@ def fetch_analysis(job_id):
     sections_url = result.get("Sections") or result.get("sections")
     bpm_val = result.get("Bpm") or result.get("bpm")
 
+    # --- chords ---
     chords_json = requests.get(chords_url).json()
-    chords = chords_json.get("chords", chords_json)
+    if isinstance(chords_json, dict):
+        chords = chords_json.get("chords", chords_json)
+    else:
+        chords = chords_json
 
+    # --- beats ---
     beats = requests.get(beats_url).json() if beats_url else None
+
+    # --- sections ---
     sections = requests.get(sections_url).json() if sections_url else None
 
+    # --- bpm ---
     bpm = None
-    if bpm_val:
+    if bpm_val is not None:
         try:
             bpm = float(bpm_val)
-        except:
+        except Exception:
             bpm = None
 
     return chords, sections, beats, bpm, "SUCCEEDED"
 
 
 # ---------------------------
-# MUSICXML ROUTE
+# STATUS ROUTE (/status/<job_id>)
+# ---------------------------
+@app.route("/status/<job_id>")
+def status(job_id):
+
+    chords, sections, beats, bpm, state = fetch_analysis(job_id)
+
+    if chords is None:
+        return jsonify({"status": state})
+
+    segments = build_segments(chords)
+
+    response = {
+        "status": "SUCCEEDED",
+        "chart": segments
+    }
+
+    if sections is not None:
+        response["sections"] = sections
+
+    if bpm is not None:
+        response["bpm"] = bpm
+
+    return jsonify(response)
+
+
+# ---------------------------
+# MUSICXML DOWNLOAD (/musicxml/<job_id>)
 # ---------------------------
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
