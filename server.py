@@ -33,53 +33,91 @@ def pick_best_chord(c):
 
 
 # ---------------------------
-# SAFE CHORD PARSER
+# ADVANCED CHORD PARSER
 # ---------------------------
 def parse_chord_for_xml(chord):
 
     try:
+        original = chord
 
-        # normalize symbols
-        chord = chord.replace("Δ", "maj")
-        chord = chord.replace("-", "m")
-
-        # remove slash bass
+        # -------- slash bass --------
+        bass_note = None
         if "/" in chord:
-            chord = chord.split("/")[0]
+            chord, bass_note = chord.split("/")
+
+        # -------- normalize --------
+        chord = chord.replace("-", "m")
 
         match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
 
         if not match:
-            return "C", None, "major"
+            return "C", None, "major", [], bass_note, original
 
         step, accidental, quality = match.groups()
 
+        # -------- accidental --------
         alter = None
         if accidental == "#":
             alter = 1
         elif accidental == "b":
             alter = -1
 
-        quality = quality.lower()
+        q = quality.lower()
 
-        if "maj7" in quality:
+        # -------- chord kind --------
+        if "m7b5" in q or "ø" in q:
+            kind = "half-diminished"
+        elif "dim" in q:
+            kind = "diminished"
+        elif "aug" in q or "+" in q:
+            kind = "augmented"
+        elif "maj7" in q or "Δ" in quality:
             kind = "major-seventh"
-        elif "m7" in quality:
+        elif "m7" in q:
             kind = "minor-seventh"
-        elif "sus" in quality:
-            kind = "suspended-fourth"
-        elif quality.startswith("m"):
-            kind = "minor"
-        elif "7" in quality:
+        elif "7" in q:
             kind = "dominant"
+        elif q.startswith("m"):
+            kind = "minor"
+        elif "sus2" in q:
+            kind = "suspended-second"
+        elif "sus" in q:
+            kind = "suspended-fourth"
         else:
             kind = "major"
 
-        return step, alter, kind
+        # -------- extensions / alterations --------
+        degrees = []
+
+        def add_degree(val, dtype="add", alter_val=None):
+            degrees.append((str(val), dtype, alter_val))
+
+        if "b5" in q:
+            add_degree(5, "alter", "-1")
+
+        if "#5" in q:
+            add_degree(5, "alter", "1")
+
+        if "b9" in q:
+            add_degree(9, "alter", "-1")
+
+        if "#9" in q:
+            add_degree(9, "alter", "1")
+
+        if "11" in q:
+            add_degree(11)
+
+        if "13" in q:
+            add_degree(13)
+
+        if "9" in q and "b9" not in q and "#9" not in q:
+            add_degree(9)
+
+        return step, alter, kind, degrees, bass_note, original
 
     except Exception as e:
         print("CHORD PARSE ERROR:", chord, e)
-        return "C", None, "major"
+        return "C", None, "major", [], None, chord
 
 
 # ---------------------------
@@ -148,16 +186,37 @@ def chords_to_musicxml(segments):
 
             harmony = SubElement(measure, "harmony")
 
-            step, alter, kind = parse_chord_for_xml(seg["chord"])
+            step, alter, kind, degrees, bass_note, original = parse_chord_for_xml(seg["chord"])
 
+            # ----- root -----
             root = SubElement(harmony, "root")
             SubElement(root, "root-step").text = step
 
-            if alter:
+            if alter is not None:
                 SubElement(root, "root-alter").text = str(alter)
 
-            SubElement(harmony, "kind").text = kind
+            # ----- kind -----
+            kind_el = SubElement(harmony, "kind")
+            kind_el.text = kind
+            kind_el.set("text", original)
 
+            # ----- bass -----
+            if bass_note:
+                bass = SubElement(harmony, "bass")
+                SubElement(bass, "bass-step").text = bass_note[0]
+
+            # ----- degrees -----
+            for value, dtype, alter_val in degrees:
+
+                degree = SubElement(harmony, "degree")
+
+                SubElement(degree, "degree-value").text = value
+                SubElement(degree, "degree-type").text = dtype
+
+                if alter_val is not None:
+                    SubElement(degree, "degree-alter").text = alter_val
+
+            # ----- offset -----
             offset = SubElement(harmony, "offset")
             offset.text = str(seg["start_beat"] - 1)
 
