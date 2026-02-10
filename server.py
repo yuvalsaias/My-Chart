@@ -45,7 +45,7 @@ def parse_chord_for_xml(chord):
         match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
 
         if not match:
-            return None   # ⭐ אין fallback ל-C
+            return None   # אין fallback ל-C
 
         step, accidental, quality = match.groups()
 
@@ -128,13 +128,19 @@ def build_segments(chords_list):
         if bass:
             chord = f"{chord}/{bass}"
 
-        segments.append({
+        seg = {
             "chord": chord,
             "start_bar": c["start_bar"],
             "start_beat": c["start_beat"],
             "end_bar": c["end_bar"],
-            "end_beat": c["end_beat"]
-        })
+            "end_beat": c["end_beat"],
+        }
+
+        # שימור זמן בשניות אם קיים ב-JSON של האקורדים
+        if "start" in c:
+            seg["start_sec"] = c["start"]
+
+        segments.append(seg)
 
     return segments
 
@@ -196,6 +202,52 @@ def expand_segments_across_bars(segments):
 
 
 # ---------------------------
+# MAP SECTIONS (SECONDS) TO BARS
+# ---------------------------
+def map_sections_to_bars(sections, segments):
+    """
+    ממפה כל section שמוגדר בזמן בשניות (start)
+    לתיבה (start_bar) על בסיס זמן ההתחלה של האקורדים (start_sec).
+    """
+    if not sections or not segments:
+        return None
+
+    # נשמור רק סגמנטים שיש להם start_sec
+    segs_with_time = [s for s in segments if "start_sec" in s]
+    if not segs_with_time:
+        return None
+
+    mapped = []
+
+    for sec in sections:
+        sec_start = sec.get("start")
+        if sec_start is None:
+            continue
+
+        # מחפשים את האקורד הראשון שמתחיל בזמן >= זמן ה-section
+        candidates = [
+            s for s in segs_with_time
+            if s["start_sec"] >= sec_start
+        ]
+
+        if not candidates:
+            # אם ה-section אחרי כל האקורדים – מדלגים
+            continue
+
+        first_seg = min(candidates, key=lambda s: s["start_sec"])
+        bar = first_seg["start_bar"]
+
+        label = sec.get("label") or "Section"
+
+        mapped.append({
+            "label": label,
+            "start_bar": bar
+        })
+
+    return mapped
+
+
+# ---------------------------
 # MUSICXML BUILDER
 # ---------------------------
 def chords_to_musicxml(segments, sections=None):
@@ -231,12 +283,7 @@ def chords_to_musicxml(segments, sections=None):
             for sec in sections:
                 sec_start_bar = sec.get("start_bar")
                 if sec_start_bar == bar:
-                    label = (
-                        sec.get("label")
-                        or sec.get("name")
-                        or sec.get("section")
-                        or "Section"
-                    )
+                    label = sec.get("label") or "Section"
                     direction = SubElement(measure, "direction", placement="above")
                     direction_type = SubElement(direction, "direction-type")
                     rehearsal = SubElement(direction_type, "rehearsal")
@@ -385,11 +432,17 @@ def musicxml(job_id):
     if chords is None:
         return jsonify({"error": "Processing"}), 400
 
-    segments = build_segments(chords)
-    segments = build_harmonic_timeline(segments)
+    # בונים סגמנטים עם זמן בשניות
+    base_segments = build_segments(chords)
+
+    # ממפים sections (בשניות) לתיבות
+    mapped_sections = map_sections_to_bars(sections, base_segments) if sections else None
+
+    # ממשיכים בצינור ההרמוני הרגיל
+    segments = build_harmonic_timeline(base_segments)
     segments = expand_segments_across_bars(segments)
 
-    xml_data = chords_to_musicxml(segments, sections)
+    xml_data = chords_to_musicxml(segments, mapped_sections)
 
     return Response(
         xml_data,
