@@ -24,7 +24,6 @@ def test():
 # PICK BEST CHORD
 # ---------------------------
 def pick_best_chord(c):
-
     return (
         c.get("chord_complex_pop")
         or c.get("chord_simple_pop")
@@ -33,19 +32,17 @@ def pick_best_chord(c):
 
 
 # ---------------------------
-# ADVANCED CHORD PARSER
+# CHORD PARSER
 # ---------------------------
 def parse_chord_for_xml(chord):
 
     try:
         original = chord
 
-        # -------- slash bass --------
         bass_note = None
         if "/" in chord:
             chord, bass_note = chord.split("/")
 
-        # -------- normalize --------
         chord = chord.replace("-", "m")
 
         match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
@@ -55,7 +52,6 @@ def parse_chord_for_xml(chord):
 
         step, accidental, quality = match.groups()
 
-        # -------- accidental --------
         alter = None
         if accidental == "#":
             alter = 1
@@ -64,7 +60,6 @@ def parse_chord_for_xml(chord):
 
         q = quality.lower()
 
-        # -------- chord kind --------
         if "m7b5" in q or "ø" in q:
             kind = "half-diminished"
         elif "dim" in q:
@@ -86,7 +81,6 @@ def parse_chord_for_xml(chord):
         else:
             kind = "major"
 
-        # -------- extensions / alterations --------
         degrees = []
 
         def add_degree(val, dtype="add", alter_val=None):
@@ -150,6 +144,30 @@ def build_segments(chords_list):
 
 
 # ---------------------------
+# NEW: EXPAND SEGMENTS ACROSS BARS
+# ---------------------------
+def expand_segments_across_bars(segments):
+
+    expanded = []
+
+    for seg in segments:
+
+        for bar in range(seg["start_bar"], seg["end_bar"] + 1):
+
+            new_seg = seg.copy()
+            new_seg["start_bar"] = bar
+
+            if bar == seg["start_bar"]:
+                new_seg["start_beat"] = seg["start_beat"]
+            else:
+                new_seg["start_beat"] = 1
+
+            expanded.append(new_seg)
+
+    return expanded
+
+
+# ---------------------------
 # MUSICXML BUILDER
 # ---------------------------
 def chords_to_musicxml(segments):
@@ -188,35 +206,29 @@ def chords_to_musicxml(segments):
 
             step, alter, kind, degrees, bass_note, original = parse_chord_for_xml(seg["chord"])
 
-            # ----- root -----
             root = SubElement(harmony, "root")
             SubElement(root, "root-step").text = step
 
             if alter is not None:
                 SubElement(root, "root-alter").text = str(alter)
 
-            # ----- kind -----
             kind_el = SubElement(harmony, "kind")
             kind_el.text = kind
             kind_el.set("text", original)
 
-            # ----- bass -----
             if bass_note:
                 bass = SubElement(harmony, "bass")
                 SubElement(bass, "bass-step").text = bass_note[0]
 
-            # ----- degrees -----
             for value, dtype, alter_val in degrees:
 
                 degree = SubElement(harmony, "degree")
-
                 SubElement(degree, "degree-value").text = value
                 SubElement(degree, "degree-type").text = dtype
 
                 if alter_val is not None:
                     SubElement(degree, "degree-alter").text = alter_val
 
-            # ----- offset -----
             offset = SubElement(harmony, "offset")
             offset.text = str(seg["start_beat"] - 1)
 
@@ -322,6 +334,9 @@ def musicxml(job_id):
         return jsonify({"error": "Processing"}), 400
 
     segments = build_segments(chords)
+
+    # ⭐ השדרוג החשוב
+    segments = expand_segments_across_bars(segments)
 
     xml_data = chords_to_musicxml(segments)
 
