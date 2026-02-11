@@ -316,10 +316,15 @@ def chords_to_musicxml(segments, sections=None, bpm=None):
                 SubElement(degree, "degree-type").text = dtype
                 if alter_val is not None:
                     SubElement(degree, "degree-alter").text = alter_val
-
             if bar == seg["start_bar"]:
                 offset = SubElement(harmony, "offset")
                 offset.text = str(seg["start_beat"] - 1)
+            else:
+                # אקורד שנמשך – צריך לדלג קדימה כדי ש-MusicXML יבין שהוא לא מתחיל מחדש
+                forward = SubElement(measure, "forward")
+                SubElement(forward, "duration").text = "1"
+
+
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
 
