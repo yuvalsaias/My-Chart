@@ -164,9 +164,8 @@ def quantize_segments_to_beats(segments, beats):
 # MAP SECTIONS TO BARS
 # ---------------------------
 def map_sections_to_bars(sections, chords):
-
     if not sections or not chords:
-        return None
+        return []
 
     mapped = []
 
@@ -189,30 +188,27 @@ def map_sections_to_bars(sections, chords):
         if bar is None:
             continue
 
-        label = sec.get("label") or "Section"
-
         mapped.append({
-            "label": label,
+            "label": sec.get("label", "Section"),
             "start_bar": bar
         })
 
+    # מניעת כפילויות רצופות
     filtered = []
     last_label = None
-
     for sec in mapped:
-        if sec["label"] == last_label:
-            continue
-        filtered.append(sec)
-        last_label = sec["label"]
+        if sec["label"] != last_label:
+            filtered.append(sec)
+            last_label = sec["label"]
 
     return filtered
+
 
 
 # ---------------------------
 # MUSICXML BUILDER (UNCHANGED)
 # ---------------------------
 def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
-
     score = Element("score-partwise", version="3.1")
 
     part_list = SubElement(score, "part-list")
@@ -227,10 +223,19 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
 
     beats_per_bar, beat_type = detect_time_signature(beats)
 
+    # --- מיפוי sections לפי תיבה ---
+    sections_by_bar = {}
+    if sections:
+        for sec in sections:
+            bar = sec["start_bar"]
+            label = sec["label"]
+            sections_by_bar.setdefault(bar, []).append(label)
+
     for i, bar in enumerate(bars):
 
-        measure = SubElement(part, "measure", number=str(bar + 1))
+        measure = SubElement(part, "measure", number=str(bar))
 
+        # --- attributes בתחילת היצירה ---
         if i == 0:
             attributes = SubElement(measure, "attributes")
 
@@ -252,15 +257,23 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
                 sound = SubElement(direction, "sound")
                 sound.set("tempo", str(bpm))
 
+        # --- הוספת Section אם מתחיל בתיבה הזו ---
+        if bar in sections_by_bar:
+            for label in sections_by_bar[bar]:
+                direction = SubElement(measure, "direction", placement="above")
+                direction_type = SubElement(direction, "direction-type")
+                words = SubElement(direction_type, "words")
+                words.text = label
+
+        # --- אקורדים בתיבה ---
         starting_here = [s for s in segments if s["start_bar"] == bar]
-        continuing_here = [
-            s for s in segments if s["start_bar"] < bar <= s["end_bar"]
-        ]
+        continuing_here = [s for s in segments if s["start_bar"] < bar <= s["end_bar"]]
 
         bar_segments = starting_here if starting_here else continuing_here
 
         for seg in bar_segments:
             harmony = SubElement(measure, "harmony")
+
             kind_el = SubElement(harmony, "kind")
             kind_el.text = "major"
             kind_el.set("text", seg["chord"])
@@ -269,6 +282,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
             offset.text = str(seg["start_beat"] - 1 if bar == seg["start_bar"] else 0)
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
+
 
 
 # ---------------------------
