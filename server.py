@@ -237,7 +237,10 @@ def chords_to_musicxml(segments, sections=None, bpm=None):
 
     part = SubElement(score, "part", id="P1")
 
-    bars = sorted(set(s["start_bar"] for s in segments))
+    # FIX: build full bar range כולל אקורדים שנמשכים
+    min_bar = min(s["start_bar"] for s in segments)
+    max_bar = max(s["end_bar"] for s in segments)
+    bars = list(range(min_bar, max_bar + 1))
 
     for i, bar in enumerate(bars):
 
@@ -316,17 +319,18 @@ def chords_to_musicxml(segments, sections=None, bpm=None):
                 SubElement(degree, "degree-type").text = dtype
                 if alter_val is not None:
                     SubElement(degree, "degree-alter").text = alter_val
+
+            # FIX: offset רק אם האקורד מתחיל בתיבה
             if bar == seg["start_bar"]:
                 offset = SubElement(harmony, "offset")
                 offset.text = str(seg["start_beat"] - 1)
             else:
-                # אקורד שנמשך – צריך לדלג קדימה כדי ש-MusicXML יבין שהוא לא מתחיל מחדש
-                forward = SubElement(measure, "forward")
-                SubElement(forward, "duration").text = "1"
-
-
+                # המשך אקורד -> תחילת תיבה
+                offset = SubElement(harmony, "offset")
+                offset.text = "0"
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
+
 
 
 # ---------------------------
