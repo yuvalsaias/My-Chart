@@ -71,6 +71,61 @@ def pick_best_chord(c):
 
 
 # ---------------------------
+# PARSE CHORD FOR XML (RESTORED)
+# ---------------------------
+def parse_chord_for_xml(chord):
+
+    try:
+        original = chord
+
+        bass_note = None
+        if "/" in chord:
+            chord, bass_note = chord.split("/")
+
+        chord = chord.replace("-", "m")
+
+        match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
+        if not match:
+            return None
+
+        step, accidental, quality = match.groups()
+
+        alter = None
+        if accidental == "#":
+            alter = 1
+        elif accidental == "b":
+            alter = -1
+
+        q = quality.lower()
+
+        if "m7b5" in q or "ø" in q:
+            kind = "half-diminished"
+        elif "dim" in q:
+            kind = "diminished"
+        elif "aug" in q or "+" in q:
+            kind = "augmented"
+        elif "maj7" in q or "Δ" in quality:
+            kind = "major-seventh"
+        elif "m7" in q:
+            kind = "minor-seventh"
+        elif "7" in q:
+            kind = "dominant"
+        elif q.startswith("m"):
+            kind = "minor"
+        elif "sus2" in q:
+            kind = "suspended-second"
+        elif "sus" in q:
+            kind = "suspended-fourth"
+        else:
+            kind = "major"
+
+        return step, alter, kind, [], bass_note, original
+
+    except Exception:
+        return None
+
+
+# ---------------------------
 # BUILD SEGMENTS (FOR XML)
 # ---------------------------
 def build_segments(chords_list):
@@ -105,7 +160,7 @@ def build_segments(chords_list):
 
 
 # ---------------------------
-# BUILD TIMELINE SEGMENTS (NEW)
+# BUILD TIMELINE SEGMENTS
 # ---------------------------
 def build_timeline_segments(chords_list):
 
@@ -161,55 +216,59 @@ def quantize_segments_to_beats(segments, beats):
 
 
 # ---------------------------
-# MAP SECTIONS TO BARS
+# FETCH ANALYSIS (FIXED)
 # ---------------------------
-def map_sections_to_bars(sections, chords):
+def fetch_analysis(job_id):
 
-    if not sections or not chords:
-        return None
+    status_res = requests.get(
+        f"https://api.music.ai/api/job/{job_id}",
+        headers={"Authorization": API_KEY}
+    )
 
-    mapped = []
+    status_data = status_res.json()
 
-    for sec in sections:
-        sec_start = sec.get("start")
-        if sec_start is None:
-            continue
+    if status_data["status"] != "SUCCEEDED":
+        return None, None, None, None, status_data["status"]
 
-        candidates = [
-            c for c in chords
-            if c.get("start") is not None and c["start"] >= sec_start
-        ]
+    result = status_data["result"]
 
-        if not candidates:
-            continue
+    # Normalize chords
+    chords_json = requests.get(
+        result.get("chords") or result.get("Chords")
+    ).json()
 
-        first = min(candidates, key=lambda c: c["start"])
-        bar = first.get("start_bar")
+    if isinstance(chords_json, dict):
+        chords = chords_json.get("chords", [])
+    else:
+        chords = chords_json
 
-        if bar is None:
-            continue
+    # Normalize beats
+    beats_json = requests.get(
+        result.get("Beats") or result.get("beats")
+    ).json()
 
-        label = sec.get("label") or "Section"
+    if isinstance(beats_json, dict):
+        beats = beats_json.get("beats", [])
+    else:
+        beats = beats_json
 
-        mapped.append({
-            "label": label,
-            "start_bar": bar
-        })
+    # Normalize sections
+    sections_json = requests.get(
+        result.get("Sections") or result.get("sections")
+    ).json()
 
-    filtered = []
-    last_label = None
+    if isinstance(sections_json, dict):
+        sections = sections_json.get("sections", [])
+    else:
+        sections = sections_json
 
-    for sec in mapped:
-        if sec["label"] == last_label:
-            continue
-        filtered.append(sec)
-        last_label = sec["label"]
+    bpm = result.get("Bpm") or result.get("bpm")
 
-    return filtered
+    return chords, sections, beats, bpm, "SUCCEEDED"
 
 
 # ---------------------------
-# MUSICXML BUILDER (UNCHANGED)
+# MUSICXML BUILDER (FIXED)
 # ---------------------------
 def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
 
@@ -233,7 +292,6 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
 
         if i == 0:
             attributes = SubElement(measure, "attributes")
-
             SubElement(attributes, "divisions").text = "1"
 
             key = SubElement(attributes, "key")
@@ -260,116 +318,33 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
         bar_segments = starting_here if starting_here else continuing_here
 
         for seg in bar_segments:
+
+            parsed = parse_chord_for_xml(seg["chord"])
+            if not parsed:
+                continue
+
+            step, alter, kind, degrees, bass_note, original = parsed
+
             harmony = SubElement(measure, "harmony")
+
+            root = SubElement(harmony, "root")
+            SubElement(root, "root-step").text = step
+
+            if alter is not None:
+                SubElement(root, "root-alter").text = str(alter)
+
             kind_el = SubElement(harmony, "kind")
-            kind_el.text = "major"
-            kind_el.set("text", seg["chord"])
+            kind_el.text = kind
+            kind_el.set("text", original)
+
+            if bass_note:
+                bass = SubElement(harmony, "bass")
+                SubElement(bass, "bass-step").text = bass_note[0]
 
             offset = SubElement(harmony, "offset")
             offset.text = str(seg["start_beat"] - 1 if bar == seg["start_bar"] else 0)
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
-
-
-# ---------------------------
-# CREATE JOB
-# ---------------------------
-@app.route("/analyze", methods=["POST"])
-def analyze():
-
-    file = request.files["file"]
-
-    upload_res = requests.get(
-        "https://api.music.ai/v1/upload",
-        headers={"Authorization": API_KEY}
-    )
-
-    upload_data = upload_res.json()
-
-    upload_url = upload_data["uploadUrl"]
-    download_url = upload_data["downloadUrl"]
-
-    requests.put(
-        upload_url,
-        data=file.read(),
-        headers={"Content-Type": file.content_type}
-    )
-
-    job_res = requests.post(
-        "https://api.music.ai/api/job",
-        headers={
-            "accept": "application/json",
-            "Content-Type": "application/json",
-            "Authorization": API_KEY
-        },
-        json={
-            "name": file.filename,
-            "workflow": WORKFLOW,
-            "params": {"Input 1": download_url}
-        }
-    )
-
-    return jsonify({"job_id": job_res.json()["id"]})
-
-
-# ---------------------------
-# FETCH ANALYSIS
-# ---------------------------
-def fetch_analysis(job_id):
-
-    status_res = requests.get(
-        f"https://api.music.ai/api/job/{job_id}",
-        headers={"Authorization": API_KEY}
-    )
-
-    status_data = status_res.json()
-
-    if status_data["status"] != "SUCCEEDED":
-        return None, None, None, None, status_data["status"]
-
-    result = status_data["result"]
-
-    chords = requests.get(result.get("chords") or result.get("Chords")).json()
-    beats = requests.get(result.get("Beats") or result.get("beats")).json()
-    sections = requests.get(result.get("Sections") or result.get("sections")).json()
-
-    bpm = result.get("Bpm") or result.get("bpm")
-
-    return chords, sections, beats, bpm, "SUCCEEDED"
-
-
-# ---------------------------
-# STATUS ROUTE (UPDATED)
-# ---------------------------
-@app.route("/status/<job_id>")
-def status(job_id):
-
-    chords, sections, beats, bpm, state = fetch_analysis(job_id)
-
-    if chords is None:
-        return jsonify({"status": state})
-
-    xml_segments = build_segments(chords)
-    timeline_segments = build_timeline_segments(chords)
-
-    beats_per_bar, beat_type = detect_time_signature(beats)
-
-    response = {
-        "status": "SUCCEEDED",
-        "chart": xml_segments,
-        "timeline_chords": timeline_segments,
-        "beats": beats,
-        "time_signature": {
-            "beats_per_bar": beats_per_bar,
-            "beat_type": beat_type
-        },
-        "bpm": bpm
-    }
-
-    if sections:
-        response["sections"] = sections
-
-    return jsonify(response)
 
 
 # ---------------------------
