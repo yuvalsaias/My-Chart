@@ -21,6 +21,39 @@ def test():
 
 
 # ---------------------------
+# DETECT TIME SIGNATURE FROM BEATS
+# ---------------------------
+def detect_time_signature(beats):
+
+    if not beats:
+        return 4, 4
+
+    counts = []
+    current = 0
+
+    for b in beats:
+        if b["beatNum"] == 1:
+            if current > 0:
+                counts.append(current)
+            current = 1
+        else:
+            current += 1
+
+    if current > 0:
+        counts.append(current)
+
+    if not counts:
+        return 4, 4
+
+    beats_per_bar = max(set(counts), key=counts.count)
+
+    if beats_per_bar in (6, 9, 12):
+        return beats_per_bar, 8
+
+    return beats_per_bar, 4
+
+
+# ---------------------------
 # PICK BEST CHORD
 # ---------------------------
 def pick_best_chord(c):
@@ -227,7 +260,7 @@ def map_sections_to_bars(sections, chords):
 # ---------------------------
 # MUSICXML BUILDER
 # ---------------------------
-def chords_to_musicxml(segments, sections=None, bpm=None):
+def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
 
     score = Element("score-partwise", version="3.1")
 
@@ -237,10 +270,11 @@ def chords_to_musicxml(segments, sections=None, bpm=None):
 
     part = SubElement(score, "part", id="P1")
 
-    # FIX: build full bar range כולל אקורדים שנמשכים
     min_bar = min(s["start_bar"] for s in segments)
     max_bar = max(s["end_bar"] for s in segments)
     bars = list(range(min_bar, max_bar + 1))
+
+    beats_per_bar, beat_type = detect_time_signature(beats)
 
     for i, bar in enumerate(bars):
 
@@ -255,8 +289,8 @@ def chords_to_musicxml(segments, sections=None, bpm=None):
             SubElement(key, "fifths").text = "0"
 
             time = SubElement(attributes, "time")
-            SubElement(time, "beats").text = "4"
-            SubElement(time, "beat-type").text = "4"
+            SubElement(time, "beats").text = str(beats_per_bar)
+            SubElement(time, "beat-type").text = str(beat_type)
 
             if bpm is not None:
                 direction = SubElement(measure, "direction", placement="above")
@@ -276,10 +310,8 @@ def chords_to_musicxml(segments, sections=None, bpm=None):
                     rehearsal = SubElement(direction_type, "rehearsal")
                     rehearsal.text = label
 
-        # אקורדים שמתחילים בתיבה הזו
         starting_here = [s for s in segments if s["start_bar"] == bar]
 
-        # אקורדים שנמשכים לתיבה הזו
         continuing_here = [
             s for s in segments
             if s["start_bar"] < bar <= s["end_bar"]
@@ -320,17 +352,14 @@ def chords_to_musicxml(segments, sections=None, bpm=None):
                 if alter_val is not None:
                     SubElement(degree, "degree-alter").text = alter_val
 
-            # FIX: offset רק אם האקורד מתחיל בתיבה
             if bar == seg["start_bar"]:
                 offset = SubElement(harmony, "offset")
                 offset.text = str(seg["start_beat"] - 1)
             else:
-                # המשך אקורד -> תחילת תיבה
                 offset = SubElement(harmony, "offset")
                 offset.text = "0"
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
-
 
 
 # ---------------------------
@@ -460,7 +489,7 @@ def musicxml(job_id):
     segments = quantize_segments_to_beats(segments, beats)
     mapped_sections = map_sections_to_bars(sections, chords) if sections else None
 
-    xml_data = chords_to_musicxml(segments, mapped_sections, bpm)
+    xml_data = chords_to_musicxml(segments, mapped_sections, bpm, beats)
 
     return Response(
         xml_data,
