@@ -57,17 +57,23 @@ def detect_time_signature(beats):
 # PICK BEST CHORD
 # ---------------------------
 def pick_best_chord(c):
-
     chord = (
         c.get("chord_complex_pop")
         or c.get("chord_simple_pop")
         or c.get("chord_basic_pop")
+        or c.get("chord_complex_jazz")
+        or c.get("chord_simple_jazz")
+        or c.get("chord_basic_jazz")
+        or c.get("chord_complex_nashville")
+        or c.get("chord_simple_nashville")
+        or c.get("chord_basic_nashville")
     )
 
     if chord in (None, "N"):
         return None
 
     return chord
+
 
 
 # ---------------------------
@@ -400,13 +406,18 @@ def musicxml(job_id):
     segments = build_segments(chords)
     segments = quantize_segments_to_beats(segments, beats)
 
-    xml_data = chords_to_musicxml(segments, sections, bpm, beats)
+    # מיפוי נכון של sections לתיבות
+    mapped_sections = map_sections_to_bars(sections, chords)
+
+    # יצירת MusicXML עם sections + chords
+    xml_data = chords_to_musicxml(segments, mapped_sections, bpm, beats)
 
     return Response(
         xml_data,
         mimetype="application/xml",
         headers={"Content-Disposition": "attachment; filename=chords.musicxml"}
     )
+
 
 
 if __name__ == "__main__":
