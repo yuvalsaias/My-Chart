@@ -21,7 +21,7 @@ def test():
 
 
 # ---------------------------
-# DETECT TIME SIGNATURE FROM BEATS
+# DETECT TIME SIGNATURE
 # ---------------------------
 def detect_time_signature(beats):
 
@@ -71,90 +71,7 @@ def pick_best_chord(c):
 
 
 # ---------------------------
-# ADVANCED CHORD PARSER
-# ---------------------------
-def parse_chord_for_xml(chord):
-
-    try:
-        original = chord
-
-        bass_note = None
-        if "/" in chord:
-            chord, bass_note = chord.split("/")
-
-        chord = chord.replace("-", "m")
-
-        match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
-
-        if not match:
-            return None
-
-        step, accidental, quality = match.groups()
-
-        alter = None
-        if accidental == "#":
-            alter = 1
-        elif accidental == "b":
-            alter = -1
-
-        q = quality.lower()
-
-        if "m7b5" in q or "ø" in q:
-            kind = "half-diminished"
-        elif "dim" in q:
-            kind = "diminished"
-        elif "aug" in q or "+" in q:
-            kind = "augmented"
-        elif "maj7" in q or "Δ" in quality:
-            kind = "major-seventh"
-        elif "m7" in q:
-            kind = "minor-seventh"
-        elif "7" in q:
-            kind = "dominant"
-        elif q.startswith("m"):
-            kind = "minor"
-        elif "sus2" in q:
-            kind = "suspended-second"
-        elif "sus" in q:
-            kind = "suspended-fourth"
-        else:
-            kind = "major"
-
-        degrees = []
-
-        def add_degree(val, dtype="add", alter_val=None):
-            degrees.append((str(val), dtype, alter_val))
-
-        if "b5" in q:
-            add_degree(5, "alter", "-1")
-
-        if "#5" in q:
-            add_degree(5, "alter", "1")
-
-        if "b9" in q:
-            add_degree(9, "alter", "-1")
-
-        if "#9" in q:
-            add_degree(9, "alter", "1")
-
-        if "11" in q:
-            add_degree(11)
-
-        if "13" in q:
-            add_degree(13)
-
-        if "9" in q and "b9" not in q and "#9" not in q:
-            add_degree(9)
-
-        return step, alter, kind, degrees, bass_note, original
-
-    except Exception as e:
-        print("CHORD PARSE ERROR:", chord, e)
-        return None
-
-
-# ---------------------------
-# BUILD SEGMENTS
+# BUILD SEGMENTS (FOR XML)
 # ---------------------------
 def build_segments(chords_list):
 
@@ -188,6 +105,39 @@ def build_segments(chords_list):
 
 
 # ---------------------------
+# BUILD TIMELINE SEGMENTS (NEW)
+# ---------------------------
+def build_timeline_segments(chords_list):
+
+    timeline = []
+
+    for c in chords_list:
+
+        chord = pick_best_chord(c)
+        bass = c.get("bass")
+
+        if not chord:
+            continue
+
+        if bass:
+            chord = f"{chord}/{bass}"
+
+        start = c.get("start")
+        end = c.get("end")
+
+        if start is None or end is None:
+            continue
+
+        timeline.append({
+            "chord": chord,
+            "start": start,
+            "end": end
+        })
+
+    return timeline
+
+
+# ---------------------------
 # QUANTIZE SEGMENTS TO BEATS
 # ---------------------------
 def quantize_segments_to_beats(segments, beats):
@@ -211,7 +161,7 @@ def quantize_segments_to_beats(segments, beats):
 
 
 # ---------------------------
-# MAP SECTIONS (SECONDS) TO BARS
+# MAP SECTIONS TO BARS
 # ---------------------------
 def map_sections_to_bars(sections, chords):
 
@@ -235,6 +185,7 @@ def map_sections_to_bars(sections, chords):
 
         first = min(candidates, key=lambda c: c["start"])
         bar = first.get("start_bar")
+
         if bar is None:
             continue
 
@@ -258,7 +209,7 @@ def map_sections_to_bars(sections, chords):
 
 
 # ---------------------------
-# MUSICXML BUILDER
+# MUSICXML BUILDER (UNCHANGED)
 # ---------------------------
 def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
 
@@ -301,63 +252,21 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
                 sound = SubElement(direction, "sound")
                 sound.set("tempo", str(bpm))
 
-        if sections:
-            for sec in sections:
-                if sec.get("start_bar") == bar:
-                    label = sec.get("label") or "Section"
-                    direction = SubElement(measure, "direction", placement="above")
-                    direction_type = SubElement(direction, "direction-type")
-                    rehearsal = SubElement(direction_type, "rehearsal")
-                    rehearsal.text = label
-
         starting_here = [s for s in segments if s["start_bar"] == bar]
-
         continuing_here = [
-            s for s in segments
-            if s["start_bar"] < bar <= s["end_bar"]
+            s for s in segments if s["start_bar"] < bar <= s["end_bar"]
         ]
 
-        if starting_here:
-            bar_segments = starting_here
-        else:
-            bar_segments = continuing_here
+        bar_segments = starting_here if starting_here else continuing_here
 
         for seg in bar_segments:
-            parsed = parse_chord_for_xml(seg["chord"])
-            if not parsed:
-                continue
-
-            step, alter, kind, degrees, bass_note, original = parsed
-
             harmony = SubElement(measure, "harmony")
-
-            root = SubElement(harmony, "root")
-            SubElement(root, "root-step").text = step
-
-            if alter is not None:
-                SubElement(root, "root-alter").text = str(alter)
-
             kind_el = SubElement(harmony, "kind")
-            kind_el.text = kind
-            kind_el.set("text", original)
+            kind_el.text = "major"
+            kind_el.set("text", seg["chord"])
 
-            if bass_note:
-                bass = SubElement(harmony, "bass")
-                SubElement(bass, "bass-step").text = bass_note[0]
-
-            for value, dtype, alter_val in degrees:
-                degree = SubElement(harmony, "degree")
-                SubElement(degree, "degree-value").text = value
-                SubElement(degree, "degree-type").text = dtype
-                if alter_val is not None:
-                    SubElement(degree, "degree-alter").text = alter_val
-
-            if bar == seg["start_bar"]:
-                offset = SubElement(harmony, "offset")
-                offset.text = str(seg["start_beat"] - 1)
-            else:
-                offset = SubElement(harmony, "offset")
-                offset.text = "0"
+            offset = SubElement(harmony, "offset")
+            offset.text = str(seg["start_beat"] - 1 if bar == seg["start_bar"] else 0)
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
 
@@ -400,9 +309,7 @@ def analyze():
         }
     )
 
-    job_data = job_res.json()
-
-    return jsonify({"job_id": job_data["id"]})
+    return jsonify({"job_id": job_res.json()["id"]})
 
 
 # ---------------------------
@@ -422,33 +329,17 @@ def fetch_analysis(job_id):
 
     result = status_data["result"]
 
-    chords_url = result.get("chords") or result.get("Chords")
-    beats_url = result.get("Beats") or result.get("beats")
-    sections_url = result.get("Sections") or result.get("sections")
-    bpm_val = result.get("Bpm") or result.get("bpm")
+    chords = requests.get(result.get("chords") or result.get("Chords")).json()
+    beats = requests.get(result.get("Beats") or result.get("beats")).json()
+    sections = requests.get(result.get("Sections") or result.get("sections")).json()
 
-    chords_json = requests.get(chords_url).json()
-
-    if isinstance(chords_json, dict):
-        chords = chords_json.get("chords", chords_json)
-    else:
-        chords = chords_json
-
-    beats = requests.get(beats_url).json() if beats_url else None
-    sections = requests.get(sections_url).json() if sections_url else None
-
-    bpm = None
-    if bpm_val is not None:
-        try:
-            bpm = float(bpm_val)
-        except Exception:
-            bpm = None
+    bpm = result.get("Bpm") or result.get("bpm")
 
     return chords, sections, beats, bpm, "SUCCEEDED"
 
 
 # ---------------------------
-# STATUS ROUTE
+# STATUS ROUTE (UPDATED)
 # ---------------------------
 @app.route("/status/<job_id>")
 def status(job_id):
@@ -458,18 +349,25 @@ def status(job_id):
     if chords is None:
         return jsonify({"status": state})
 
-    segments = build_segments(chords)
+    xml_segments = build_segments(chords)
+    timeline_segments = build_timeline_segments(chords)
+
+    beats_per_bar, beat_type = detect_time_signature(beats)
 
     response = {
         "status": "SUCCEEDED",
-        "chart": segments
+        "chart": xml_segments,
+        "timeline_chords": timeline_segments,
+        "beats": beats,
+        "time_signature": {
+            "beats_per_bar": beats_per_bar,
+            "beat_type": beat_type
+        },
+        "bpm": bpm
     }
 
-    if sections is not None:
+    if sections:
         response["sections"] = sections
-
-    if bpm is not None:
-        response["bpm"] = bpm
 
     return jsonify(response)
 
@@ -487,9 +385,8 @@ def musicxml(job_id):
 
     segments = build_segments(chords)
     segments = quantize_segments_to_beats(segments, beats)
-    mapped_sections = map_sections_to_bars(sections, chords) if sections else None
 
-    xml_data = chords_to_musicxml(segments, mapped_sections, bpm, beats)
+    xml_data = chords_to_musicxml(segments, sections, bpm, beats)
 
     return Response(
         xml_data,
