@@ -383,7 +383,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
 
 
 # ---------------------------
-# CREATE JOB (NOW SUPPORTS MANUAL BPM)
+# CREATE JOB (NOW SENDS MANUAL BPM TO MUSIC.AI)
 # ---------------------------
 @app.route("/analyze", methods=["POST"])
 def analyze():
@@ -409,9 +409,9 @@ def analyze():
 
     params = {"Input 1": download_url}
 
-    # אם המשתמש הכניס BPM ידני — נוסיף אותו ל־job
+    # שולחים BPM ידני ל‑Music.AI כדי שהניתוח יתבצע לפי BPM נכון
     if manual_bpm:
-        params["manual_bpm"] = manual_bpm
+        params["bpm"] = manual_bpm
 
     job_res = requests.post(
         "https://api.music.ai/api/job",
@@ -454,7 +454,7 @@ def fetch_analysis(job_id):
     sections_url = result.get("Sections") or result.get("sections")
 
     bpm_val = result.get("Bpm") or result.get("bpm")
-    manual_bpm = result.get("manual_bpm")  # <--- BPM ידני
+    manual_bpm = result.get("bpm")  # Music.AI מחזיר אותו תחת אותו השם
 
     chords_json = requests.get(chords_url).json()
 
