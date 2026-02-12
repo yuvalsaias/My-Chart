@@ -291,7 +291,7 @@ def map_sections_to_bars(sections, chords):
 
 
 # ---------------------------
-# MUSICXML BUILDER (FIXED: NO DUPLICATE CHORDS)
+# MUSICXML BUILDER (NO DUPLICATE CHORDS)
 # ---------------------------
 def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
 
@@ -383,12 +383,13 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
 
 
 # ---------------------------
-# CREATE JOB
+# CREATE JOB (NOW SUPPORTS MANUAL BPM)
 # ---------------------------
 @app.route("/analyze", methods=["POST"])
 def analyze():
 
     file = request.files["file"]
+    manual_bpm = request.form.get("bpm_override")  # <--- BPM ידני
 
     upload_res = requests.get(
         "https://api.music.ai/v1/upload",
@@ -406,6 +407,12 @@ def analyze():
         headers={"Content-Type": file.content_type}
     )
 
+    params = {"Input 1": download_url}
+
+    # אם המשתמש הכניס BPM ידני — נוסיף אותו ל־job
+    if manual_bpm:
+        params["manual_bpm"] = manual_bpm
+
     job_res = requests.post(
         "https://api.music.ai/api/job",
         headers={
@@ -416,7 +423,7 @@ def analyze():
         json={
             "name": file.filename,
             "workflow": WORKFLOW,
-            "params": {"Input 1": download_url}
+            "params": params
         }
     )
 
@@ -426,7 +433,7 @@ def analyze():
 
 
 # ---------------------------
-# FETCH ANALYSIS
+# FETCH ANALYSIS (RESPECTS MANUAL BPM)
 # ---------------------------
 def fetch_analysis(job_id):
 
@@ -445,7 +452,9 @@ def fetch_analysis(job_id):
     chords_url = result.get("chords") or result.get("Chords")
     beats_url = result.get("Beats") or result.get("beats")
     sections_url = result.get("Sections") or result.get("sections")
+
     bpm_val = result.get("Bpm") or result.get("bpm")
+    manual_bpm = result.get("manual_bpm")  # <--- BPM ידני
 
     chords_json = requests.get(chords_url).json()
 
@@ -457,11 +466,16 @@ def fetch_analysis(job_id):
     beats = requests.get(beats_url).json() if beats_url else None
     sections = requests.get(sections_url).json() if sections_url else None
 
-    bpm = None
-    if bpm_val is not None:
+    # BPM ידני קודם
+    if manual_bpm:
+        try:
+            bpm = float(manual_bpm)
+        except:
+            bpm = None
+    else:
         try:
             bpm = float(bpm_val)
-        except Exception:
+        except:
             bpm = None
 
     return chords, sections, beats, bpm, "SUCCEEDED"
