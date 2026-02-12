@@ -291,7 +291,7 @@ def map_sections_to_bars(sections, chords):
 
 
 # ---------------------------
-# MUSICXML BUILDER (כמו בגרסה שעבדה לך)
+# MUSICXML BUILDER (FIXED: NO DUPLICATE CHORDS)
 # ---------------------------
 def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
 
@@ -345,17 +345,8 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
 
         starting_here = [s for s in segments if s["start_bar"] == bar]
 
-        continuing_here = [
-            s for s in segments
-            if s["start_bar"] < bar <= s["end_bar"]
-        ]
-
-        if starting_here:
-            bar_segments = starting_here
-        else:
-            bar_segments = continuing_here
-
-        for seg in bar_segments:
+        # כתיבת אקורדים רק אם הם מתחילים בתיבה הזו
+        for seg in starting_here:
             parsed = parse_chord_for_xml(seg["chord"])
             if not parsed:
                 continue
@@ -385,12 +376,8 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
                 if alter_val is not None:
                     SubElement(degree, "degree-alter").text = alter_val
 
-            if bar == seg["start_bar"]:
-                offset = SubElement(harmony, "offset")
-                offset.text = str(seg["start_beat"] - 1)
-            else:
-                offset = SubElement(harmony, "offset")
-                offset.text = "0"
+            offset = SubElement(harmony, "offset")
+            offset.text = str(seg["start_beat"] - 1)
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
 
@@ -515,7 +502,7 @@ def status(job_id):
 
 
 # ---------------------------
-# MUSICXML DOWNLOAD (לא נגענו)
+# MUSICXML DOWNLOAD
 # ---------------------------
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
