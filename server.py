@@ -12,19 +12,42 @@ API_KEY = os.environ.get("API_KEY")
 WORKFLOW = "my-chart-recognizer"
 
 
-# ---------------------------
-# TEST ROUTE
-# ---------------------------
-@app.route("/test")
-def test():
-    return "Server works!"
+# ---------------------------------------------------
+# BPM SCALING
+# ---------------------------------------------------
+def apply_bpm_scaling(beats, chords, detected_bpm, manual_bpm):
+    try:
+        detected_bpm = float(detected_bpm)
+        manual_bpm = float(manual_bpm)
+    except:
+        return beats, chords
+
+    if detected_bpm <= 0 or manual_bpm <= 0:
+        return beats, chords
+
+    scale = detected_bpm / manual_bpm
+
+    # scale beats
+    if beats:
+        for b in beats:
+            if "time" in b and b["time"] is not None:
+                b["time"] = b["time"] / scale
+
+    # scale chords
+    if chords:
+        for c in chords:
+            if "start" in c and c["start"] is not None:
+                c["start"] = c["start"] / scale
+            if "end" in c and c["end"] is not None:
+                c["end"] = c["end"] / scale
+
+    return beats, chords
 
 
-# ---------------------------
-# DETECT TIME SIGNATURE FROM BEATS
-# ---------------------------
+# ---------------------------------------------------
+# TIME SIGNATURE DETECTION
+# ---------------------------------------------------
 def detect_time_signature(beats):
-
     if not beats:
         return 4, 4
 
@@ -53,39 +76,34 @@ def detect_time_signature(beats):
     return beats_per_bar, 4
 
 
-# ---------------------------
-# PICK BEST CHORD
-# ---------------------------
+# ---------------------------------------------------
+# CHORD PICKER
+# ---------------------------------------------------
 def pick_best_chord(c):
-
     chord = (
         c.get("chord_complex_pop")
         or c.get("chord_simple_pop")
         or c.get("chord_basic_pop")
     )
-
     if chord in (None, "N"):
         return None
-
     return chord
 
 
-# ---------------------------
-# ADVANCED CHORD PARSER (FOR MUSICXML)
-# ---------------------------
+# ---------------------------------------------------
+# CHORD PARSER FOR MUSICXML
+# ---------------------------------------------------
 def parse_chord_for_xml(chord):
-
     try:
         original = chord
-
         bass_note = None
+
         if "/" in chord:
             chord, bass_note = chord.split("/")
 
         chord = chord.replace("-", "m")
 
         match = re.match(r"^([A-G])([#b]?)(.*)$", chord)
-
         if not match:
             return None
 
@@ -127,41 +145,31 @@ def parse_chord_for_xml(chord):
 
         if "b5" in q:
             add_degree(5, "alter", "-1")
-
         if "#5" in q:
             add_degree(5, "alter", "1")
-
         if "b9" in q:
             add_degree(9, "alter", "-1")
-
         if "#9" in q:
             add_degree(9, "alter", "1")
-
         if "11" in q:
             add_degree(11)
-
         if "13" in q:
             add_degree(13)
-
         if "9" in q and "b9" not in q and "#9" not in q:
             add_degree(9)
 
         return step, alter, kind, degrees, bass_note, original
 
-    except Exception as e:
-        print("CHORD PARSE ERROR:", chord, e)
+    except:
         return None
 
 
-# ---------------------------
-# BUILD SEGMENTS (FOR CHART + MUSICXML)
-# ---------------------------
+# ---------------------------------------------------
+# SEGMENTS
+# ---------------------------------------------------
 def build_segments(chords_list):
-
     segments = []
-
     for c in chords_list:
-
         chord = pick_best_chord(c)
         bass = c.get("bass")
 
@@ -187,15 +195,9 @@ def build_segments(chords_list):
     return segments
 
 
-# ---------------------------
-# BUILD TIMELINE SEGMENTS (FOR BASE44)
-# ---------------------------
 def build_timeline_segments(chords_list):
-
     timeline = []
-
     for c in chords_list:
-
         chord = pick_best_chord(c)
         bass = c.get("bass")
 
@@ -220,11 +222,10 @@ def build_timeline_segments(chords_list):
     return timeline
 
 
-# ---------------------------
-# QUANTIZE SEGMENTS TO BEATS (FOR MUSICXML)
-# ---------------------------
+# ---------------------------------------------------
+# QUANTIZE
+# ---------------------------------------------------
 def quantize_segments_to_beats(segments, beats):
-
     if not beats:
         return segments
 
@@ -243,11 +244,10 @@ def quantize_segments_to_beats(segments, beats):
     return segments
 
 
-# ---------------------------
-# MAP SECTIONS (SECONDS) TO BARS (FOR MUSICXML)
-# ---------------------------
+# ---------------------------------------------------
+# MAP SECTIONS
+# ---------------------------------------------------
 def map_sections_to_bars(sections, chords):
-
     if not sections or not chords:
         return None
 
@@ -290,9 +290,9 @@ def map_sections_to_bars(sections, chords):
     return filtered
 
 
-# ---------------------------
-# MUSICXML BUILDER (NO DUPLICATE CHORDS)
-# ---------------------------
+# ---------------------------------------------------
+# MUSICXML
+# ---------------------------------------------------
 def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
 
     score = Element("score-partwise", version="3.1")
@@ -345,7 +345,6 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
 
         starting_here = [s for s in segments if s["start_bar"] == bar]
 
-        # כתיבת אקורדים רק אם הם מתחילים בתיבה הזו
         for seg in starting_here:
             parsed = parse_chord_for_xml(seg["chord"])
             if not parsed:
@@ -382,14 +381,14 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
     return tostring(score, encoding="utf-8", xml_declaration=True)
 
 
-# ---------------------------
-# CREATE JOB (NOW SENDS MANUAL BPM TO MUSIC.AI)
-# ---------------------------
+# ---------------------------------------------------
+# CREATE JOB
+# ---------------------------------------------------
 @app.route("/analyze", methods=["POST"])
 def analyze():
 
     file = request.files["file"]
-    manual_bpm = request.form.get("bpm_override")  # <--- BPM ידני
+    manual_bpm = request.form.get("bpm_override")
 
     upload_res = requests.get(
         "https://api.music.ai/v1/upload",
@@ -409,9 +408,8 @@ def analyze():
 
     params = {"Input 1": download_url}
 
-    # שולחים BPM ידני ל‑Music.AI כדי שהניתוח יתבצע לפי BPM נכון
     if manual_bpm:
-        params["bpm"] = manual_bpm
+        params["manual_bpm"] = manual_bpm
 
     job_res = requests.post(
         "https://api.music.ai/api/job",
@@ -432,9 +430,9 @@ def analyze():
     return jsonify({"job_id": job_data["id"]})
 
 
-# ---------------------------
-# FETCH ANALYSIS (RESPECTS MANUAL BPM)
-# ---------------------------
+# ---------------------------------------------------
+# FETCH ANALYSIS
+# ---------------------------------------------------
 def fetch_analysis(job_id):
 
     status_res = requests.get(
@@ -445,7 +443,7 @@ def fetch_analysis(job_id):
     status_data = status_res.json()
 
     if status_data["status"] != "SUCCEEDED":
-        return None, None, None, None, status_data["status"]
+        return None, None, None, None, None, status_data["status"]
 
     result = status_data["result"]
 
@@ -453,8 +451,8 @@ def fetch_analysis(job_id):
     beats_url = result.get("Beats") or result.get("beats")
     sections_url = result.get("Sections") or result.get("sections")
 
-    bpm_val = result.get("Bpm") or result.get("bpm")
-    manual_bpm = result.get("bpm")  # Music.AI מחזיר אותו תחת אותו השם
+    detected_bpm = result.get("Bpm") or result.get("bpm")
+    manual_bpm = result.get("manual_bpm") or None
 
     chords_json = requests.get(chords_url).json()
 
@@ -466,31 +464,25 @@ def fetch_analysis(job_id):
     beats = requests.get(beats_url).json() if beats_url else None
     sections = requests.get(sections_url).json() if sections_url else None
 
-    # BPM ידני קודם
-    if manual_bpm:
-        try:
-            bpm = float(manual_bpm)
-        except:
-            bpm = None
-    else:
-        try:
-            bpm = float(bpm_val)
-        except:
-            bpm = None
-
-    return chords, sections, beats, bpm, "SUCCEEDED"
+    return chords, sections, beats, detected_bpm, manual_bpm, "SUCCEEDED"
 
 
-# ---------------------------
-# STATUS ROUTE (ל־BASE44 + TIMELINE)
-# ---------------------------
+# ---------------------------------------------------
+# STATUS ROUTE
+# ---------------------------------------------------
 @app.route("/status/<job_id>")
 def status(job_id):
 
-    chords, sections, beats, bpm, state = fetch_analysis(job_id)
+    chords, sections, beats, detected_bpm, manual_bpm, state = fetch_analysis(job_id)
 
     if chords is None:
         return jsonify({"status": state})
+
+    if manual_bpm:
+        beats, chords = apply_bpm_scaling(beats, chords, detected_bpm, manual_bpm)
+        bpm = float(manual_bpm)
+    else:
+        bpm = float(detected_bpm) if detected_bpm else None
 
     segments = build_segments(chords)
     timeline_segments = build_timeline_segments(chords)
@@ -515,16 +507,22 @@ def status(job_id):
     return jsonify(response)
 
 
-# ---------------------------
-# MUSICXML DOWNLOAD
-# ---------------------------
+# ---------------------------------------------------
+# MUSICXML ROUTE
+# ---------------------------------------------------
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
 
-    chords, sections, beats, bpm, state = fetch_analysis(job_id)
+    chords, sections, beats, detected_bpm, manual_bpm, state = fetch_analysis(job_id)
 
     if chords is None:
         return jsonify({"error": "Processing"}), 400
+
+    if manual_bpm:
+        beats, chords = apply_bpm_scaling(beats, chords, detected_bpm, manual_bpm)
+        bpm = float(manual_bpm)
+    else:
+        bpm = float(detected_bpm) if detected_bpm else None
 
     segments = build_segments(chords)
     segments = quantize_segments_to_beats(segments, beats)
