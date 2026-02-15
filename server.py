@@ -364,9 +364,24 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None):
             kind_el.text = kind
             kind_el.set("text", original)
 
+            # -------------------------
+            # FIXED BASS NOTE BLOCK
+            # -------------------------
             if bass_note:
                 bass = SubElement(harmony, "bass")
-                SubElement(bass, "bass-step").text = bass_note[0]
+
+                bass_step = bass_note[0]
+                bass_alter = None
+
+                if len(bass_note) > 1:
+                    if bass_note[1] == "#":
+                        bass_alter = 1
+                    elif bass_note[1] == "b":
+                        bass_alter = -1
+
+                SubElement(bass, "bass-step").text = bass_step
+                if bass_alter is not None:
+                    SubElement(bass, "bass-alter").text = str(bass_alter)
 
             for value, dtype, alter_val in degrees:
                 degree = SubElement(harmony, "degree")
