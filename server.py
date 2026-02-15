@@ -293,28 +293,35 @@ def map_sections_to_bars(sections, chords):
 # ---------------------------------------------------
 # KEY PARSING FOR MUSICXML
 # ---------------------------------------------------
-def parse_root_key(root_key):
-    if not root_key:
+def parse_key_to_musicxml(key_str):
+    if not key_str:
         return 0, "major"
 
-    parts = root_key.split()
+    parts = key_str.strip().split()
     tonic = parts[0]
     mode = parts[1].lower() if len(parts) > 1 else "major"
 
-    major_fifths = {
-        "C": 0, "G": 1, "D": 2, "A": 3, "E": 4, "B": 5, "F#": 6, "C#": 7,
-        "F": -1, "Bb": -2, "Eb": -3, "Ab": -4, "Db": -5, "Gb": -6, "Cb": -7,
+    fifths_map = {
+        "C": 0,
+        "G": 1,
+        "D": 2,
+        "A": 3,
+        "E": 4,
+        "B": 5,
+        "F#": 6,
+        "C#": 7,
+        "F": -1,
+        "Bb": -2,
+        "Eb": -3,
+        "Ab": -4,
+        "Db": -5,
+        "Gb": -6,
+        "Cb": -7,
     }
 
-    minor_fifths = {
-        "A": 0, "E": 1, "B": 2, "F#": 3, "C#": 4, "G#": 5, "D#": 6, "A#": 7,
-        "D": -1, "G": -2, "C": -3, "F": -4, "Bb": -5, "Eb": -6, "Ab": -7,
-    }
-
-    if mode == "minor":
-        fifths = minor_fifths.get(tonic, 0)
-    else:
-        fifths = major_fifths.get(tonic, 0)
+    fifths = fifths_map.get(tonic, 0)
+    if mode not in ("major", "minor"):
+        mode = "major"
 
     return fifths, mode
 
@@ -322,7 +329,7 @@ def parse_root_key(root_key):
 # ---------------------------------------------------
 # MUSICXML
 # ---------------------------------------------------
-def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, root_key=None):
+def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=None):
 
     score = Element("score-partwise", version="3.1")
 
@@ -337,7 +344,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, root_key=N
     bars = list(range(min_bar, max_bar + 1))
 
     beats_per_bar, beat_type = detect_time_signature(beats)
-    fifths, mode = parse_root_key(root_key)
+    key_fifths, key_mode = parse_key_to_musicxml(key_str)
 
     for i, bar in enumerate(bars):
 
@@ -349,8 +356,8 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, root_key=N
             SubElement(attributes, "divisions").text = "1"
 
             key = SubElement(attributes, "key")
-            SubElement(key, "fifths").text = str(fifths)
-            SubElement(key, "mode").text = mode
+            SubElement(key, "fifths").text = str(key_fifths)
+            SubElement(key, "mode").text = key_mode
 
             time = SubElement(attributes, "time")
             SubElement(time, "beats").text = str(beats_per_bar)
@@ -395,7 +402,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, root_key=N
             kind_el.text = kind
             kind_el.set("text", original)
 
-            # bass note
+            # BASS NOTE BLOCK
             if bass_note:
                 bass = SubElement(harmony, "bass")
 
@@ -497,7 +504,7 @@ def fetch_analysis(job_id):
 
     detected_bpm = result.get("Bpm") or result.get("bpm")
     manual_bpm = result.get("manual_bpm") or None
-    root_key = result.get("root key") or result.get("root_key") or result.get("RootKey")
+    root_key = result.get("root key") or result.get("root_key")
 
     chords_json = requests.get(chords_url).json()
 
@@ -544,7 +551,7 @@ def status(job_id):
             "beat_type": beat_type
         },
         "bpm": bpm,
-        "key": root_key,  # for BASE44 / frontend
+        "key": root_key
     }
 
     if sections is not None:
@@ -574,7 +581,7 @@ def musicxml(job_id):
     segments = quantize_segments_to_beats(segments, beats)
     mapped_sections = map_sections_to_bars(sections, chords) if sections else None
 
-    xml_data = chords_to_musicxml(segments, mapped_sections, bpm, beats, root_key=root_key)
+    xml_data = chords_to_musicxml(segments, mapped_sections, bpm, beats, key_str=root_key)
 
     return Response(
         xml_data,
