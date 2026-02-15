@@ -438,47 +438,84 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
 @app.route("/analyze", methods=["POST"])
 def analyze():
 
-    file = request.files["file"]
-    manual_bpm = request.form.get("bpm_override")
+    try:
+        if "file" not in request.files:
+            return jsonify({"error": "No file field named 'file' in form-data"}), 400
 
-    upload_res = requests.get(
-        "https://api.music.ai/v1/upload",
-        headers={"Authorization": API_KEY}
-    )
+        file = request.files["file"]
+        manual_bpm = request.form.get("bpm_override")
 
-    upload_data = upload_res.json()
+        if not API_KEY:
+            return jsonify({"error": "API_KEY environment variable is not set"}), 500
 
-    upload_url = upload_data["uploadUrl"]
-    download_url = upload_data["downloadUrl"]
+        upload_res = requests.get(
+            "https://api.music.ai/v1/upload",
+            headers={"Authorization": API_KEY}
+        )
 
-    requests.put(
-        upload_url,
-        data=file.read(),
-        headers={"Content-Type": file.content_type}
-    )
+        if upload_res.status_code != 200:
+            return jsonify({
+                "error": "Failed to get upload URL from music.ai",
+                "status_code": upload_res.status_code,
+                "response": upload_res.text
+            }), 502
 
-    params = {"Input 1": download_url}
+        upload_data = upload_res.json()
 
-    if manual_bpm:
-        params["manual_bpm"] = manual_bpm
+        upload_url = upload_data.get("uploadUrl")
+        download_url = upload_data.get("downloadUrl")
 
-    job_res = requests.post(
-        "https://api.music.ai/api/job",
-        headers={
-            "accept": "application/json",
-            "Content-Type": "application/json",
-            "Authorization": API_KEY
-        },
-        json={
-            "name": file.filename,
-            "workflow": WORKFLOW,
-            "params": params
-        }
-    )
+        if not upload_url or not download_url:
+            return jsonify({
+                "error": "music.ai upload response missing URLs",
+                "response": upload_data
+            }), 502
 
-    job_data = job_res.json()
+        put_res = requests.put(
+            upload_url,
+            data=file.read(),
+            headers={"Content-Type": file.content_type}
+        )
 
-    return jsonify({"job_id": job_data["id"]})
+        if put_res.status_code not in (200, 201):
+            return jsonify({
+                "error": "Failed to upload file to music.ai storage",
+                "status_code": put_res.status_code,
+                "response": put_res.text
+            }), 502
+
+        params = {"Input 1": download_url}
+
+        if manual_bpm:
+            params["manual_bpm"] = manual_bpm
+
+        job_res = requests.post(
+            "https://api.music.ai/api/job",
+            headers={
+                "accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": API_KEY
+            },
+            json={
+                "name": file.filename,
+                "workflow": WORKFLOW,
+                "params": params
+            }
+        )
+
+        if job_res.status_code != 200:
+            return jsonify({
+                "error": "Failed to create job in music.ai",
+                "status_code": job_res.status_code,
+                "response": job_res.text
+            }), 502
+
+        job_data = job_res.json()
+
+        return jsonify({"job_id": job_data.get("id")})
+
+    except Exception as e:
+        return jsonify({"error": "Unexpected server error", "details": str(e)}), 500
 
 
 # ---------------------------------------------------
