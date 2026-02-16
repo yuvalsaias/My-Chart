@@ -27,11 +27,13 @@ def apply_bpm_scaling(beats, chords, detected_bpm, manual_bpm):
 
     scale = detected_bpm / manual_bpm
 
+    # scale beats
     if beats:
         for b in beats:
             if "time" in b and b["time"] is not None:
                 b["time"] = b["time"] / scale
 
+    # scale chords
     if chords:
         for c in chords:
             if "start" in c and c["start"] is not None:
@@ -400,6 +402,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
             kind_el.text = kind
             kind_el.set("text", original)
 
+            # BASS NOTE BLOCK
             if bass_note:
                 bass = SubElement(harmony, "bass")
 
@@ -585,7 +588,7 @@ def status(job_id):
             "beat_type": beat_type
         },
         "bpm": bpm,
-        "key": root_key   # <-- FIXED: BASE44 now receives the key
+        "key": root_key
     }
 
     if sections is not None:
@@ -597,4 +600,33 @@ def status(job_id):
 # ---------------------------------------------------
 # MUSICXML ROUTE
 # ---------------------------------------------------
-@app.route("/musicxml/<job_id
+@app.route("/musicxml/<job_id>")
+def musicxml(job_id):
+
+    chords, sections, beats, detected_bpm, manual_bpm, root_key, state = fetch_analysis(job_id)
+
+    if chords is None:
+        return jsonify({"error": "Processing"}), 400
+
+    if manual_bpm:
+        beats, chords = apply_bpm_scaling(beats, chords, detected_bpm, manual_bpm)
+        bpm = float(manual_bpm)
+    else:
+        bpm = float(detected_bpm) if detected_bpm else None
+
+    segments = build_segments(chords)
+    segments = quantize_segments_to_beats(segments, beats)
+    mapped_sections = map_sections_to_bars(sections, chords) if sections else None
+
+    xml_data = chords_to_musicxml(segments, mapped_sections, bpm, beats, key_str=root_key)
+
+    return Response(
+        xml_data,
+        mimetype="application/xml",
+        headers={"Content-Disposition": "attachment; filename=chords.musicxml"}
+    )
+
+
+if __name__ == "__main__":
+    port = int(os.environ.get("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
