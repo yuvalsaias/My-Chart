@@ -346,6 +346,11 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
     beats_per_bar, beat_type = detect_time_signature(beats)
     key_fifths, key_mode = parse_key_to_musicxml(key_str)
 
+    # divisions per quarter note
+    divisions = 480
+    # how many divisions per "beat" (beatNum) according to time signature
+    units_per_beat = int(divisions * 4 / beat_type)
+
     for i, bar in enumerate(bars):
 
         measure = SubElement(part, "measure", number=str(bar + 1))
@@ -353,7 +358,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
         if i == 0:
             attributes = SubElement(measure, "attributes")
 
-            SubElement(attributes, "divisions").text = "1"
+            SubElement(attributes, "divisions").text = str(divisions)
 
             key = SubElement(attributes, "key")
             SubElement(key, "fifths").text = str(key_fifths)
@@ -381,9 +386,30 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
                     rehearsal = SubElement(direction_type, "rehearsal")
                     rehearsal.text = label
 
+        # all segments starting in this bar
         starting_here = [s for s in segments if s["start_bar"] == bar]
+        starting_here.sort(key=lambda s: s.get("start_beat", 1))
 
-        for seg in starting_here:
+        current_beat = 1
+
+        # helper to create a rest note of N beats
+        def add_rest(beats_len):
+            if beats_len <= 0:
+                return
+            dur = int(beats_len * units_per_beat)
+            note = SubElement(measure, "note")
+            SubElement(note, "rest")
+            SubElement(note, "duration").text = str(dur)
+
+        for idx, seg in enumerate(starting_here):
+            seg_start_beat = seg.get("start_beat", 1)
+
+            # gap before this chord
+            gap_beats = seg_start_beat - current_beat
+            if gap_beats > 0:
+                add_rest(gap_beats)
+                current_beat += gap_beats
+
             parsed = parse_chord_for_xml(seg["chord"])
             if not parsed:
                 continue
@@ -426,8 +452,23 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
                 if alter_val is not None:
                     SubElement(degree, "degree-alter").text = alter_val
 
-            offset = SubElement(harmony, "offset")
-            offset.text = str(seg["start_beat"] - 1)
+            # duration of this chord inside the bar
+            if idx < len(starting_here) - 1 and starting_here[idx + 1]["start_bar"] == bar:
+                next_beat = starting_here[idx + 1].get("start_beat", beats_per_bar + 1)
+                dur_beats = max(0, next_beat - seg_start_beat)
+            else:
+                dur_beats = max(0, beats_per_bar - seg_start_beat + 1)
+
+            if dur_beats > 0:
+                add_rest(dur_beats)
+                current_beat = seg_start_beat + dur_beats
+            else:
+                current_beat = seg_start_beat
+
+        # tail of bar if needed
+        if current_beat <= beats_per_bar:
+            tail_beats = beats_per_bar - current_beat + 1
+            add_rest(tail_beats)
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
 
