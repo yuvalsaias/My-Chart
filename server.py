@@ -27,13 +27,11 @@ def apply_bpm_scaling(beats, chords, detected_bpm, manual_bpm):
 
     scale = detected_bpm / manual_bpm
 
-    # scale beats
     if beats:
         for b in beats:
             if "time" in b and b["time"] is not None:
                 b["time"] = b["time"] / scale
 
-    # scale chords
     if chords:
         for c in chords:
             if "start" in c and c["start"] is not None:
@@ -327,7 +325,7 @@ def parse_key_to_musicxml(key_str):
 
 
 # ---------------------------------------------------
-# MUSICXML
+# MUSICXML  (UPDATED)
 # ---------------------------------------------------
 def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=None):
 
@@ -346,18 +344,15 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
     beats_per_bar, beat_type = detect_time_signature(beats)
     key_fifths, key_mode = parse_key_to_musicxml(key_str)
 
-    # divisions per quarter note
     divisions = 480
-    # how many divisions per "beat" (beatNum) according to time signature
     units_per_beat = int(divisions * 4 / beat_type)
 
     for i, bar in enumerate(bars):
 
-        measure = SubElement(part, "measure", number=str(bar + 1))
+        measure = SubElement(part, "measure", number=str(bar))
 
         if i == 0:
             attributes = SubElement(measure, "attributes")
-
             SubElement(attributes, "divisions").text = str(divisions)
 
             key = SubElement(attributes, "key")
@@ -380,19 +375,16 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
         if sections:
             for sec in sections:
                 if sec.get("start_bar") == bar:
-                    label = sec.get("label") or "Section"
                     direction = SubElement(measure, "direction", placement="above")
                     direction_type = SubElement(direction, "direction-type")
                     rehearsal = SubElement(direction_type, "rehearsal")
-                    rehearsal.text = label
+                    rehearsal.text = sec.get("label")
 
-        # all segments starting in this bar
-        starting_here = [s for s in segments if s["start_bar"] == bar]
-        starting_here.sort(key=lambda s: s.get("start_beat", 1))
+        bar_segments = [s for s in segments if s["start_bar"] == bar]
+        bar_segments.sort(key=lambda s: s["start_beat"])
 
         current_beat = 1
 
-        # helper to create a rest note of N beats
         def add_rest(beats_len):
             if beats_len <= 0:
                 return
@@ -401,14 +393,13 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
             SubElement(note, "rest")
             SubElement(note, "duration").text = str(dur)
 
-        for idx, seg in enumerate(starting_here):
-            seg_start_beat = seg.get("start_beat", 1)
+        for idx, seg in enumerate(bar_segments):
+            seg_start = seg["start_beat"]
 
-            # gap before this chord
-            gap_beats = seg_start_beat - current_beat
-            if gap_beats > 0:
-                add_rest(gap_beats)
-                current_beat += gap_beats
+            gap = seg_start - current_beat
+            if gap > 0:
+                add_rest(gap)
+                current_beat += gap
 
             parsed = parse_chord_for_xml(seg["chord"])
             if not parsed:
@@ -420,7 +411,6 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
 
             root = SubElement(harmony, "root")
             SubElement(root, "root-step").text = step
-
             if alter is not None:
                 SubElement(root, "root-alter").text = str(alter)
 
@@ -428,47 +418,33 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
             kind_el.text = kind
             kind_el.set("text", original)
 
-            # BASS NOTE BLOCK
             if bass_note:
                 bass = SubElement(harmony, "bass")
-
-                bass_step = bass_note[0]
-                bass_alter = None
-
+                SubElement(bass, "bass-step").text = bass_note[0]
                 if len(bass_note) > 1:
                     if bass_note[1] == "#":
-                        bass_alter = 1
+                        SubElement(bass, "bass-alter").text = "1"
                     elif bass_note[1] == "b":
-                        bass_alter = -1
-
-                SubElement(bass, "bass-step").text = bass_step
-                if bass_alter is not None:
-                    SubElement(bass, "bass-alter").text = str(bass_alter)
+                        SubElement(bass, "bass-alter").text = "-1"
 
             for value, dtype, alter_val in degrees:
                 degree = SubElement(harmony, "degree")
                 SubElement(degree, "degree-value").text = value
                 SubElement(degree, "degree-type").text = dtype
-                if alter_val is not None:
+                if alter_val:
                     SubElement(degree, "degree-alter").text = alter_val
 
-            # duration of this chord inside the bar
-            if idx < len(starting_here) - 1 and starting_here[idx + 1]["start_bar"] == bar:
-                next_beat = starting_here[idx + 1].get("start_beat", beats_per_bar + 1)
-                dur_beats = max(0, next_beat - seg_start_beat)
+            if idx < len(bar_segments) - 1:
+                next_beat = bar_segments[idx + 1]["start_beat"]
+                dur_beats = next_beat - seg_start
             else:
-                dur_beats = max(0, beats_per_bar - seg_start_beat + 1)
+                dur_beats = beats_per_bar - seg_start + 1
 
-            if dur_beats > 0:
-                add_rest(dur_beats)
-                current_beat = seg_start_beat + dur_beats
-            else:
-                current_beat = seg_start_beat
+            add_rest(dur_beats)
+            current_beat = seg_start + dur_beats
 
-        # tail of bar if needed
         if current_beat <= beats_per_bar:
-            tail_beats = beats_per_bar - current_beat + 1
-            add_rest(tail_beats)
+            add_rest(beats_per_bar - current_beat + 1)
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
 
@@ -610,64 +586,4 @@ def status(job_id):
 
     if manual_bpm:
         beats, chords = apply_bpm_scaling(beats, chords, detected_bpm, manual_bpm)
-        bpm = float(manual_bpm)
-    else:
-        bpm = float(detected_bpm) if detected_bpm else None
-
-    segments = build_segments(chords)
-    timeline_segments = build_timeline_segments(chords)
-
-    beats_per_bar, beat_type = detect_time_signature(beats)
-
-    response = {
-        "status": "SUCCEEDED",
-        "chart": segments,
-        "timeline_chords": timeline_segments,
-        "beats": beats,
-        "time_signature": {
-            "beats_per_bar": beats_per_bar,
-            "beat_type": beat_type
-        },
-        "bpm": bpm,
-        "key": root_key
-    }
-
-    if sections is not None:
-        response["sections"] = sections
-
-    return jsonify(response)
-
-
-# ---------------------------------------------------
-# MUSICXML ROUTE
-# ---------------------------------------------------
-@app.route("/musicxml/<job_id>")
-def musicxml(job_id):
-
-    chords, sections, beats, detected_bpm, manual_bpm, root_key, state = fetch_analysis(job_id)
-
-    if chords is None:
-        return jsonify({"error": "Processing"}), 400
-
-    if manual_bpm:
-        beats, chords = apply_bpm_scaling(beats, chords, detected_bpm, manual_bpm)
-        bpm = float(manual_bpm)
-    else:
-        bpm = float(detected_bpm) if detected_bpm else None
-
-    segments = build_segments(chords)
-    segments = quantize_segments_to_beats(segments, beats)
-    mapped_sections = map_sections_to_bars(sections, chords) if sections else None
-
-    xml_data = chords_to_musicxml(segments, mapped_sections, bpm, beats, key_str=root_key)
-
-    return Response(
-        xml_data,
-        mimetype="application/xml",
-        headers={"Content-Disposition": "attachment; filename=chords.musicxml"}
-    )
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+        bpm = float(manual_bpm
