@@ -27,11 +27,13 @@ def apply_bpm_scaling(beats, chords, detected_bpm, manual_bpm):
 
     scale = detected_bpm / manual_bpm
 
+    # scale beats
     if beats:
         for b in beats:
             if "time" in b and b["time"] is not None:
                 b["time"] = b["time"] / scale
 
+    # scale chords
     if chords:
         for c in chords:
             if "start" in c and c["start"] is not None:
@@ -325,7 +327,7 @@ def parse_key_to_musicxml(key_str):
 
 
 # ---------------------------------------------------
-# MUSICXML (FIXED — with proper note durations)
+# MUSICXML
 # ---------------------------------------------------
 def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=None):
 
@@ -344,43 +346,22 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
     beats_per_bar, beat_type = detect_time_signature(beats)
     key_fifths, key_mode = parse_key_to_musicxml(key_str)
 
-    DURATION_TYPE_MAP = {
-        4: "whole",
-        3: "half",    # dotted half
-        2: "half",
-        1: "quarter",
-    }
-
-    def add_note_rest(parent, duration):
-        """Add a rest note with proper duration and type."""
-        if duration <= 0:
-            return
-        note = SubElement(parent, "note")
-        SubElement(note, "rest")
-        SubElement(note, "duration").text = str(duration)
-        ntype = DURATION_TYPE_MAP.get(duration)
-        if ntype:
-            SubElement(note, "type").text = ntype
-        if duration == 3:
-            SubElement(note, "dot")
-
     for i, bar in enumerate(bars):
 
         measure = SubElement(part, "measure", number=str(bar + 1))
 
-        # First measure — attributes
         if i == 0:
             attributes = SubElement(measure, "attributes")
 
             SubElement(attributes, "divisions").text = "1"
 
-            key_el = SubElement(attributes, "key")
-            SubElement(key_el, "fifths").text = str(key_fifths)
-            SubElement(key_el, "mode").text = key_mode
+            key = SubElement(attributes, "key")
+            SubElement(key, "fifths").text = str(key_fifths)
+            SubElement(key, "mode").text = key_mode
 
-            time_el = SubElement(attributes, "time")
-            SubElement(time_el, "beats").text = str(beats_per_bar)
-            SubElement(time_el, "beat-type").text = str(beat_type)
+            time = SubElement(attributes, "time")
+            SubElement(time, "beats").text = str(beats_per_bar)
+            SubElement(time, "beat-type").text = str(beat_type)
 
             if bpm is not None:
                 direction = SubElement(measure, "direction", placement="above")
@@ -391,7 +372,6 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
                 sound = SubElement(direction, "sound")
                 sound.set("tempo", str(bpm))
 
-        # Rehearsal marks (sections)
         if sections:
             for sec in sections:
                 if sec.get("start_bar") == bar:
@@ -401,34 +381,15 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
                     rehearsal = SubElement(direction_type, "rehearsal")
                     rehearsal.text = label
 
-        # Get chords starting in this bar, sorted by beat
-        starting_here = sorted(
-            [s for s in segments if s["start_bar"] == bar],
-            key=lambda s: s["start_beat"]
-        )
+        starting_here = [s for s in segments if s["start_bar"] == bar]
 
-        # Empty bar — whole rest
-        if not starting_here:
-            add_note_rest(measure, beats_per_bar)
-            continue
-
-        # Build beat positions: each chord's beat + end of bar
-        beat_positions = [s["start_beat"] for s in starting_here]
-        beat_positions.append(beats_per_bar + 1)
-
-        # Rest before first chord if it doesn't start on beat 1
-        if beat_positions[0] > 1:
-            rest_dur = beat_positions[0] - 1
-            add_note_rest(measure, rest_dur)
-
-        for idx, seg in enumerate(starting_here):
+        for seg in starting_here:
             parsed = parse_chord_for_xml(seg["chord"])
             if not parsed:
                 continue
 
             step, alter, kind, degrees, bass_note, original = parsed
 
-            # Harmony element (NO offset — position set by notes)
             harmony = SubElement(measure, "harmony")
 
             root = SubElement(harmony, "root")
@@ -441,7 +402,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
             kind_el.text = kind
             kind_el.set("text", original)
 
-            # Bass note
+            # BASS NOTE BLOCK
             if bass_note:
                 bass = SubElement(harmony, "bass")
 
@@ -458,7 +419,6 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
                 if bass_alter is not None:
                     SubElement(bass, "bass-alter").text = str(bass_alter)
 
-            # Degree alterations
             for value, dtype, alter_val in degrees:
                 degree = SubElement(harmony, "degree")
                 SubElement(degree, "degree-value").text = value
@@ -466,13 +426,8 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
                 if alter_val is not None:
                     SubElement(degree, "degree-alter").text = alter_val
 
-            # Duration until next chord or end of bar
-            current_beat = seg["start_beat"]
-            next_beat = beat_positions[idx + 1]
-            dur = next_beat - current_beat
-
-            # Rest note with correct duration
-            add_note_rest(measure, dur)
+            offset = SubElement(harmony, "offset")
+            offset.text = str(seg["start_beat"] - 1)
 
     return tostring(score, encoding="utf-8", xml_declaration=True)
 
