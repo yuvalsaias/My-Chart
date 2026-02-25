@@ -365,8 +365,14 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
     if not segments:
         return tostring(score, encoding="utf-8", xml_declaration=True)
 
-    max_bar = max(s["end_bar"] for s in segments)
-    bars = list(range(0, max_bar + 1))
+    bar_time_map = detect_time_signature_per_bar(beats)
+
+    if bar_time_map:
+        total_bars = len(bar_time_map)
+    else:
+        total_bars = max(s["end_bar"] for s in segments) + 1
+
+    bars = list(range(0, total_bars))
 
     key_fifths, key_mode = parse_key_to_musicxml(key_str)
 
