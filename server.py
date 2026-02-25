@@ -45,7 +45,7 @@ def apply_bpm_scaling(beats, chords, detected_bpm, manual_bpm):
 
 
 # ---------------------------------------------------
-# TIME SIGNATURE DETECTION
+# TIME SIGNATURE DETECTION (GLOBAL)
 # ---------------------------------------------------
 def detect_time_signature(beats):
     if not beats:
@@ -80,7 +80,6 @@ def detect_time_signature(beats):
 # TIME SIGNATURE PER BAR
 # ---------------------------------------------------
 def detect_time_signature_per_bar(beats):
-
     if not beats:
         return {}
 
@@ -192,7 +191,7 @@ def parse_chord_for_xml(chord):
 
 
 # ---------------------------------------------------
-# SEGMENTS
+# SEGMENTS – משתמשים בדיוק ב-bar/beat מה-JSON
 # ---------------------------------------------------
 def build_segments(chords_list):
     segments = []
@@ -214,6 +213,7 @@ def build_segments(chords_list):
             "end_beat": c["end_beat"],
         }
 
+        # נשמור גם זמן אם קיים, אבל לא נשתמש בו כדי לשנות bar/beat
         if "start" in c:
             seg["start_sec"] = c["start"]
 
@@ -250,35 +250,12 @@ def build_timeline_segments(chords_list):
 
 
 # ---------------------------------------------------
-# QUANTIZE
-# ---------------------------------------------------
-def quantize_segments_to_beats(segments, beats):
-    if not beats:
-        return segments
-
-    for seg in segments:
-        t = seg.get("start_sec")
-        if t is None:
-            continue
-
-        closest = min(
-            beats,
-            key=lambda b: abs((b.get("time") or 0) - t)
-        )
-
-        seg["start_beat"] = closest["beatNum"]
-
-    return segments
-
-
-# ---------------------------------------------------
-# MAP SECTIONS
+# MAP SECTIONS TO BARS (אופציונלי, לפי beats)
 # ---------------------------------------------------
 def map_sections_to_bars(sections, beats):
     if not sections or not beats:
         return None
 
-    # Build bar index from beats
     bar_index = -1
     beat_to_bar = []
 
@@ -294,13 +271,11 @@ def map_sections_to_bars(sections, beats):
         if sec_start is None:
             continue
 
-        # Find closest beat to section start
         closest = min(beat_to_bar, key=lambda x: abs(x[0] - sec_start))
         bar = closest[1]
 
         label = sec.get("label") or "Section"
 
-        # Avoid duplicate consecutive labels
         if mapped and mapped[-1]["label"] == label:
             continue
 
@@ -349,7 +324,7 @@ def parse_key_to_musicxml(key_str):
 
 
 # ---------------------------------------------------
-# MUSICXML
+# MUSICXML – בלי הזזות, bar/beat בדיוק כמו ב-JSON
 # ---------------------------------------------------
 def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=None):
 
@@ -382,7 +357,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
 
     for i, bar in enumerate(bars):
 
-        # measure numbers: bar index (0-based) + 1
+        # מספר תיבה = index + 1, בלי offset
         measure = SubElement(part, "measure", number=str(bar + 1))
 
         beats_in_this_bar = bar_time_map.get(i, 4)
@@ -394,7 +369,6 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
 
         units_per_beat = int(divisions * 4 / beat_type_local)
 
-        # אם יש שינוי משקל – מוסיפים attributes
         if beats_in_this_bar != previous_beats:
 
             attributes = SubElement(measure, "attributes")
@@ -431,6 +405,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
                     rehearsal = SubElement(direction_type, "rehearsal")
                     rehearsal.text = sec.get("label") or "Section"
 
+        # כל האקורדים שמתחילים בתיבה הזו – לפי start_bar מה-JSON
         starting_here = [s for s in segments if s["start_bar"] == bar]
         starting_here.sort(key=lambda s: s.get("start_beat", 1))
 
@@ -488,6 +463,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
                 if alter_val is not None:
                     SubElement(degree, "degree-alter").text = alter_val
 
+            # משך – עד האקורד הבא באותה תיבה, או עד סוף התיבה
             if idx < len(starting_here) - 1:
                 next_beat = starting_here[idx + 1].get("start_beat", beats_in_this_bar + 1)
                 dur_beats = max(0, next_beat - seg_start_beat)
@@ -689,8 +665,9 @@ def musicxml(job_id):
     else:
         bpm = float(detected_bpm) if detected_bpm else None
 
+    # בונים segments ישירות מה-JSON, בלי שום שינוי ל-bar/beat
     segments = build_segments(chords)
-    segments = quantize_segments_to_beats(segments, beats)
+
     mapped_sections = map_sections_to_bars(sections, beats) if sections else None
 
     xml_data = chords_to_musicxml(segments, mapped_sections, bpm, beats, key_str=root_key)
