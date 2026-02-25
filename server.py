@@ -83,20 +83,20 @@ def detect_time_signature_per_bar(beats):
         return {}
 
     bar_counts = {}
-    current_bar = 0
+    bar_index = -1
     current_count = 0
 
     for b in beats:
         if b["beatNum"] == 1:
             if current_count > 0:
-                bar_counts[current_bar] = current_count
-                current_bar += 1
+                bar_counts[bar_index] = current_count
+            bar_index += 1
             current_count = 1
         else:
             current_count += 1
 
     if current_count > 0:
-        bar_counts[current_bar] = current_count
+        bar_counts[bar_index] = current_count
 
     return bar_counts
 # ---------------------------------------------------
