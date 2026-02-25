@@ -75,6 +75,7 @@ def detect_time_signature(beats):
 
     return beats_per_bar, 4
 
+
 # ---------------------------------------------------
 # TIME SIGNATURE PER BAR
 # ---------------------------------------------------
@@ -100,14 +101,6 @@ def detect_time_signature_per_bar(beats):
         bar_counts[bar_index] = current_count
 
     return bar_counts
-def detect_empty_bars_before_first_chord(beats, first_chord_time):
-    bar_index = -1
-    for b in beats:
-        if b["time"] >= first_chord_time:
-            break
-        if b["beatNum"] == 1:
-            bar_index += 1
-    return bar_index
 
 
 # ---------------------------------------------------
@@ -389,6 +382,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
 
     for i, bar in enumerate(bars):
 
+        # measure numbers: bar index + 1 (תואם ל-start_bar + 1 מה-JSON)
         measure = SubElement(part, "measure", number=str(bar + 1))
 
         beats_in_this_bar = bar_time_map.get(i, 4)
@@ -696,16 +690,6 @@ def musicxml(job_id):
         bpm = float(detected_bpm) if detected_bpm else None
 
     segments = build_segments(chords)
-    # --- FIX: detect empty bars before first chord ---
-    if segments and beats:
-        first_chord_time = segments[0].get("start_sec")
-        empty_bars = detect_empty_bars_before_first_chord(beats, first_chord_time)
-
-        if empty_bars > 0:
-            for s in segments:
-                s["start_bar"] += empty_bars
-                s["end_bar"] += empty_bars
-
     segments = quantize_segments_to_beats(segments, beats)
     mapped_sections = map_sections_to_bars(sections, beats) if sections else None
 
