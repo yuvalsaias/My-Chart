@@ -79,6 +79,7 @@ def detect_time_signature(beats):
 # TIME SIGNATURE PER BAR
 # ---------------------------------------------------
 def detect_time_signature_per_bar(beats):
+
     if not beats:
         return {}
 
@@ -99,6 +100,15 @@ def detect_time_signature_per_bar(beats):
         bar_counts[bar_index] = current_count
 
     return bar_counts
+def detect_empty_bars_before_first_chord(beats, first_chord_time):
+    bar_index = -1
+    for b in beats:
+        if b["beatNum"] == 1:
+            bar_index += 1
+        if b["time"] >= first_chord_time:
+            break
+    return bar_index
+
 # ---------------------------------------------------
 # CHORD PICKER
 # ---------------------------------------------------
@@ -692,6 +702,16 @@ def musicxml(job_id):
             for s in segments:
                 s["start_bar"] -= 1
                 s["end_bar"] -= 1
+    # --- FIX: detect empty bars before first chord ---
+    if segments and beats:
+        first_chord_time = segments[0].get("start_sec")
+        empty_bars = detect_empty_bars_before_first_chord(beats, first_chord_time)
+
+        if empty_bars > 0:
+            for s in segments:
+                s["start_bar"] += empty_bars
+                s["end_bar"] += empty_bars
+
     segments = quantize_segments_to_beats(segments, beats)
     mapped_sections = map_sections_to_bars(sections, beats) if sections else None
 
