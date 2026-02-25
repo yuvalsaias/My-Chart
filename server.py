@@ -270,9 +270,18 @@ def quantize_segments_to_beats(segments, beats):
 # ---------------------------------------------------
 # MAP SECTIONS
 # ---------------------------------------------------
-def map_sections_to_bars(sections, chords):
-    if not sections or not chords:
+def map_sections_to_bars(sections, beats):
+    if not sections or not beats:
         return None
+
+    # Build bar index from beats
+    bar_index = -1
+    beat_to_bar = []
+
+    for b in beats:
+        if b["beatNum"] == 1:
+            bar_index += 1
+        beat_to_bar.append((b["time"], bar_index))
 
     mapped = []
 
@@ -281,36 +290,22 @@ def map_sections_to_bars(sections, chords):
         if sec_start is None:
             continue
 
-        candidates = [
-            c for c in chords
-            if c.get("start") is not None and c["start"] >= sec_start
-        ]
-
-        if not candidates:
-            continue
-
-        first = min(candidates, key=lambda c: c["start"])
-        bar = first.get("start_bar")
-        if bar is None:
-            continue
+        # Find closest beat to section start
+        closest = min(beat_to_bar, key=lambda x: abs(x[0] - sec_start))
+        bar = closest[1]
 
         label = sec.get("label") or "Section"
+
+        # Avoid duplicate consecutive labels
+        if mapped and mapped[-1]["label"] == label:
+            continue
 
         mapped.append({
             "label": label,
             "start_bar": bar
         })
 
-    filtered = []
-    last_label = None
-
-    for sec in mapped:
-        if sec["label"] == last_label:
-            continue
-        filtered.append(sec)
-        last_label = sec["label"]
-
-    return filtered
+    return mapped
 
 
 # ---------------------------------------------------
@@ -367,12 +362,12 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
 
     bar_time_map = detect_time_signature_per_bar(beats)
 
-    if bar_time_map:
-        total_bars = len(bar_time_map)
-    else:
-        total_bars = max(s["end_bar"] for s in segments) + 1
+    beats_bars = len(bar_time_map) if bar_time_map else 0
+    segments_bars = max(s["end_bar"] for s in segments) + 1 if segments else 0
 
-    bars = list(range(0, total_bars))
+    total_bars = max(beats_bars, segments_bars)
+
+    bars = list(range(total_bars))
 
     key_fifths, key_mode = parse_key_to_musicxml(key_str)
 
@@ -691,7 +686,7 @@ def musicxml(job_id):
 
     segments = build_segments(chords)
     segments = quantize_segments_to_beats(segments, beats)
-    mapped_sections = map_sections_to_bars(sections, chords) if sections else None
+    mapped_sections = map_sections_to_bars(sections, beats) if sections else None
 
     xml_data = chords_to_musicxml(segments, mapped_sections, bpm, beats, key_str=root_key)
 
