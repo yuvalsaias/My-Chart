@@ -667,6 +667,11 @@ def musicxml(job_id):
 
     # בונים segments ישירות מה-JSON, בלי שום שינוי ל-bar/beat
     segments = build_segments(chords)
+    # Convert 1-based bars (music.ai) to 0-based (internal)
+    if segments:
+        for s in segments:
+            s["start_bar"] -= 1
+            s["end_bar"] -= 1
 
     mapped_sections = map_sections_to_bars(sections, beats) if sections else None
 
