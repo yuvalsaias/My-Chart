@@ -695,13 +695,6 @@ def musicxml(job_id):
         bpm = float(detected_bpm) if detected_bpm else None
 
     segments = build_segments(chords)
-    # Normalize 1-based bars to 0-based
-    if segments:
-        min_bar = min(s["start_bar"] for s in segments)
-        if min_bar == 1:
-            for s in segments:
-                s["start_bar"] -= 1
-                s["end_bar"] -= 1
     # --- FIX: detect empty bars before first chord ---
     if segments and beats:
         first_chord_time = segments[0].get("start_sec")
