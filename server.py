@@ -382,7 +382,7 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
 
     for i, bar in enumerate(bars):
 
-        # measure numbers: bar index + 1 (תואם ל-start_bar + 1 מה-JSON)
+        # measure numbers: bar index (0-based) + 1
         measure = SubElement(part, "measure", number=str(bar + 1))
 
         beats_in_this_bar = bar_time_map.get(i, 4)
