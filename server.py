@@ -103,11 +103,12 @@ def detect_time_signature_per_bar(beats):
 def detect_empty_bars_before_first_chord(beats, first_chord_time):
     bar_index = -1
     for b in beats:
-        if b["beatNum"] == 1:
-            bar_index += 1
         if b["time"] >= first_chord_time:
             break
+        if b["beatNum"] == 1:
+            bar_index += 1
     return bar_index
+
 
 # ---------------------------------------------------
 # CHORD PICKER
