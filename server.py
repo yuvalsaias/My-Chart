@@ -298,7 +298,7 @@ def parse_key_to_musicxml(key_str):
     tonic = parts[0]
     mode = parts[1].lower() if len(parts) > 1 else "major"
 
-    fifths_map = {
+    major_fifths = {
         "C": 0,
         "G": 1,
         "D": 2,
@@ -316,13 +316,65 @@ def parse_key_to_musicxml(key_str):
         "Cb": -7,
     }
 
-    fifths = fifths_map.get(tonic, 0)
-    if mode not in ("major", "minor"):
-        mode = "major"
+    if mode == "major":
+        return major_fifths.get(tonic, 0), "major"
 
-    return fifths, mode
+    # מינור → מחשבים לפי relative major
+    relative_major_map = {
+        "A": "C",
+        "E": "G",
+        "B": "D",
+        "F#": "A",
+        "C#": "E",
+        "G#": "B",
+        "D#": "F#",
+        "D": "F",
+        "G": "Bb",
+        "C": "Eb",
+        "F": "Ab",
+        "Bb": "Db",
+        "Eb": "Gb",
+        "Ab": "Cb",
+    }
 
+    relative_major = relative_major_map.get(tonic)
 
+    if relative_major and relative_major in major_fifths:
+        return major_fifths[relative_major], "minor"
+
+    return 0, "minor"
+
+def normalize_chord_spelling(chord, prefer_flats):
+    if not chord:
+        return chord
+
+    sharp_to_flat = {
+        "A#": "Bb",
+        "C#": "Db",
+        "D#": "Eb",
+        "F#": "Gb",
+        "G#": "Ab",
+    }
+
+    flat_to_sharp = {
+        "Bb": "A#",
+        "Db": "C#",
+        "Eb": "D#",
+        "Gb": "F#",
+        "Ab": "G#",
+    }
+
+    # אם הסולם עם במולים
+    if prefer_flats:
+        for sharp, flat in sharp_to_flat.items():
+            if chord.startswith(sharp):
+                return chord.replace(sharp, flat, 1)
+    else:
+        for flat, sharp in flat_to_sharp.items():
+            if chord.startswith(flat):
+                return chord.replace(flat, sharp, 1)
+
+    return chord
 # ---------------------------------------------------
 # MUSICXML – בלי הזזות, bar/beat בדיוק כמו ב-JSON
 # ---------------------------------------------------
@@ -427,6 +479,9 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
             if gap_beats > 0:
                 add_rest(gap_beats)
                 current_beat += gap_beats
+
+            prefer_flats = key_fifths < 0
+            seg["chord"] = normalize_chord_spelling(seg["chord"], prefer_flats)
 
             parsed = parse_chord_for_xml(seg["chord"])
             if not parsed:
