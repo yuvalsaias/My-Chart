@@ -362,9 +362,11 @@ def chords_to_musicxml(segments, sections=None, bpm=None, beats=None, key_str=No
 
     part = SubElement(score, "part", id="P1")
 
-    min_bar = min(s["start_bar"] for s in segments)
+    if not segments:
+        return tostring(score, encoding="utf-8", xml_declaration=True)
+
     max_bar = max(s["end_bar"] for s in segments)
-    bars = list(range(min_bar, max_bar + 1))
+    bars = list(range(0, max_bar + 1))
 
     key_fifths, key_mode = parse_key_to_musicxml(key_str)
 
