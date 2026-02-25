@@ -51,30 +51,37 @@ def detect_time_signature(beats):
     if not beats:
         return 4, 4
 
-    counts = []
-    current = 0
+    bar_lengths = []
+    current_count = 0
 
     for b in beats:
         if b["beatNum"] == 1:
-            if current > 0:
-                counts.append(current)
-            current = 1
+            if current_count > 0:
+                bar_lengths.append(current_count)
+            current_count = 1
         else:
-            current += 1
+            current_count += 1
 
-    if current > 0:
-        counts.append(current)
+    if current_count > 0:
+        bar_lengths.append(current_count)
 
-    if not counts:
+    if not bar_lengths:
         return 4, 4
 
-    beats_per_bar = max(set(counts), key=counts.count)
+    # אם התיבה הראשונה קצרה משמעותית מהשאר → אנקרוזה
+    if len(bar_lengths) > 2:
+        if bar_lengths[0] < bar_lengths[1]:
+            bar_lengths = bar_lengths[1:]
 
-    if beats_per_bar in (6, 9, 12):
-        return beats_per_bar, 8
+    # ניקח את הערך שמופיע הכי הרבה
+    from collections import Counter
+    most_common_length = Counter(bar_lengths).most_common(1)[0][0]
 
-    return beats_per_bar, 4
-
+    # עכשיו קובעים beat-type
+    if most_common_length in (6, 9, 12):
+        return most_common_length, 8
+    else:
+        return most_common_length, 4
 
 # ---------------------------------------------------
 # TIME SIGNATURE PER BAR
