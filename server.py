@@ -704,7 +704,7 @@ def status(job_id):
             "beat_type": beat_type
         },
         "bpm": bpm,
-        "key": root_key
+        "key": root_key,
         "title": title,
         "artist": artist,
         "isrc": isrc
