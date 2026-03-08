@@ -644,7 +644,7 @@ def fetch_analysis(job_id):
     status_data = status_res.json()
 
     if status_data["status"] != "SUCCEEDED":
-        return None, None, None, None, None, None, status_data["status"]
+        return None, None, None, None, None, None, None, None, None, status_data["status"]
 
     result = status_data["result"]
 
