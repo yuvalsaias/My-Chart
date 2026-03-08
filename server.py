@@ -655,6 +655,9 @@ def fetch_analysis(job_id):
     detected_bpm = result.get("Bpm") or result.get("bpm")
     manual_bpm = result.get("manual_bpm") or None
     root_key = result.get("root key") or result.get("root_key")
+    title = result.get("Title") or result.get("title")
+    artist = result.get("Artist") or result.get("artist")
+    isrc = result.get("ISRC") or result.get("isrc")
 
     chords_json = requests.get(chords_url).json()
 
@@ -666,7 +669,7 @@ def fetch_analysis(job_id):
     beats = requests.get(beats_url).json() if beats_url else None
     sections = requests.get(sections_url).json() if sections_url else None
 
-    return chords, sections, beats, detected_bpm, manual_bpm, root_key, "SUCCEEDED"
+    return chords, sections, beats, detected_bpm, manual_bpm, root_key, title, artist, isrc, "SUCCEEDED"
 
 
 # ---------------------------------------------------
@@ -675,7 +678,7 @@ def fetch_analysis(job_id):
 @app.route("/status/<job_id>")
 def status(job_id):
 
-    chords, sections, beats, detected_bpm, manual_bpm, root_key, state = fetch_analysis(job_id)
+    chords, sections, beats, detected_bpm, manual_bpm, root_key, title, artist, isrc, state = fetch_analysis(job_id)
 
     if chords is None:
         return jsonify({"status": state})
@@ -702,6 +705,9 @@ def status(job_id):
         },
         "bpm": bpm,
         "key": root_key
+        "title": title,
+        "artist": artist,
+        "isrc": isrc
     }
 
     if sections is not None:
