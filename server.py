@@ -722,7 +722,7 @@ def status(job_id):
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
 
-    chords, sections, beats, detected_bpm, manual_bpm, root_key, state = fetch_analysis(job_id)
+    chords, sections, beats, detected_bpm, manual_bpm, root_key, title, artist, isrc, state = fetch_analysis(job_id)
 
     if chords is None:
         return jsonify({"error": "Processing"}), 400
