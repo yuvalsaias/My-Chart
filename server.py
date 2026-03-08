@@ -644,7 +644,7 @@ def fetch_analysis(job_id):
     status_data = status_res.json()
 
     if status_data["status"] != "SUCCEEDED":
-        return None, None, None, None, None, None, None, None, None, status_data["status"]
+        return None, None, None, None, None, None, None, None, None, None, status_data["status"]
 
     result = status_data["result"]
 
@@ -658,6 +658,7 @@ def fetch_analysis(job_id):
     title = result.get("Title") or result.get("title")
     artist = result.get("Artist") or result.get("artist")
     isrc = result.get("ISRC") or result.get("isrc")
+    language = result.get("Language") or result.get("language")
 
     chords_json = requests.get(chords_url).json()
 
@@ -669,7 +670,7 @@ def fetch_analysis(job_id):
     beats = requests.get(beats_url).json() if beats_url else None
     sections = requests.get(sections_url).json() if sections_url else None
 
-    return chords, sections, beats, detected_bpm, manual_bpm, root_key, title, artist, isrc, "SUCCEEDED"
+    return chords, sections, beats, detected_bpm, manual_bpm, root_key, title, artist, isrc, language, "SUCCEEDED"
 
 
 # ---------------------------------------------------
@@ -678,7 +679,7 @@ def fetch_analysis(job_id):
 @app.route("/status/<job_id>")
 def status(job_id):
 
-    chords, sections, beats, detected_bpm, manual_bpm, root_key, title, artist, isrc, state = fetch_analysis(job_id)
+    chords, sections, beats, detected_bpm, manual_bpm, root_key, title, artist, isrc, language, state = fetch_analysis(job_id)
 
     if chords is None:
         return jsonify({"status": state})
@@ -707,7 +708,8 @@ def status(job_id):
         "key": root_key,
         "title": title,
         "artist": artist,
-        "isrc": isrc
+        "isrc": isrc,
+        "language": language
     }
 
     if sections is not None:
@@ -722,7 +724,7 @@ def status(job_id):
 @app.route("/musicxml/<job_id>")
 def musicxml(job_id):
 
-    chords, sections, beats, detected_bpm, manual_bpm, root_key, title, artist, isrc, state = fetch_analysis(job_id)
+    chords, sections, beats, detected_bpm, manual_bpm, root_key, title, artist, isrc, language, state = fetch_analysis(job_id)
 
     if chords is None:
         return jsonify({"error": "Processing"}), 400
